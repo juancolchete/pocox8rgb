@@ -1,0 +1,50 @@
+# File: .github/workflows/build-apk.yml
+# Created: 2026-04-14
+
+name: Generate Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows you to trigger the build manually from the GitHub UI
+
+jobs:
+  build-android:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java Development Kit (JDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17' # Standard for modern React Native / Android builds
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: Grant Execute Permission for Gradle Wrapper
+        working-directory: android
+        run: chmod +x gradlew
+
+      - name: Build Android Release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: poco-rgb-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 7
