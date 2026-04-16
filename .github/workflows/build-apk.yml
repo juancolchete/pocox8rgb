@@ -112,12 +112,13 @@ jobs:
         run: |
           cat << 'EOF' > pocox8rgb/App.tsx
           import React, { useState, useEffect } from 'react';
-          import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet } from 'react-native';
+          import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet, TextInput } from 'react-native';
 
           const { PocoNotificationBacklight } = NativeModules;
 
           export default function App() {
             const [activeColor, setActiveColor] = useState('None');
+            const [delay, setDelay] = useState('5'); // Default 5 seconds delay
 
             useEffect(() => {
               requestNotificationPermission();
@@ -134,14 +135,37 @@ jobs:
             };
 
             const triggerColor = (name, hex) => {
-              PocoNotificationBacklight.triggerLight(hex, name);
-              setActiveColor(name);
+              const delayMs = parseInt(delay, 10) * 1000 || 0;
+              
+              if (delayMs > 0) {
+                setActiveColor(`Waiting ${delay}s for ${name}...`);
+                setTimeout(() => {
+                  PocoNotificationBacklight.triggerLight(hex, name);
+                  setActiveColor(name);
+                }, delayMs);
+              } else {
+                PocoNotificationBacklight.triggerLight(hex, name);
+                setActiveColor(name);
+              }
             };
 
             return (
               <View style={styles.container}>
                 <Text style={styles.title}>POCO X8 Pro Max Notification LED</Text>
-                <Text style={styles.subtitle}>Active Target: {activeColor}</Text>
+                
+                <View style={styles.inputContainer}>
+                  <Text style={styles.label}>Delay (seconds):</Text>
+                  <TextInput
+                    style={styles.input}
+                    keyboardType="numeric"
+                    value={delay}
+                    onChangeText={setDelay}
+                    placeholder="0"
+                    placeholderTextColor="#6B7280"
+                  />
+                </View>
+
+                <Text style={styles.subtitle}>Status: {activeColor}</Text>
                 <Text style={styles.warning}>*Lock the device screen immediately after pressing a color.</Text>
                 
                 <View style={styles.row}>
@@ -166,7 +190,10 @@ jobs:
           const styles = StyleSheet.create({
             container: { flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', padding: 20 },
             title: { fontSize: 24, fontWeight: 'bold', color: 'white', marginBottom: 20, textAlign: 'center' },
-            subtitle: { color: '#9CA3AF', marginBottom: 10 },
+            inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+            label: { color: 'white', fontSize: 16, marginRight: 10 },
+            input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
+            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 16 },
             warning: { color: '#EAB308', fontSize: 12, textAlign: 'center', marginBottom: 30 },
             row: { flexDirection: 'row', gap: 10 },
             btn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
@@ -201,4 +228,3 @@ jobs:
           name: pocox8rgb-debug-apk
           path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
-          
