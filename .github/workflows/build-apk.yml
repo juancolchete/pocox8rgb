@@ -178,6 +178,17 @@ jobs:
           });
           EOF
 
+      - name: Bundle React Native JS into APK
+        working-directory: pocox8rgb
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res
+
       - name: Build Android Debug APK
         working-directory: pocox8rgb/android
         run: |
@@ -190,3 +201,4 @@ jobs:
           name: pocox8rgb-debug-apk
           path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
+          
