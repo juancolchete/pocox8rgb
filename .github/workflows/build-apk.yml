@@ -38,6 +38,9 @@ jobs:
           import android.app.NotificationManager
           import android.content.Context
           import android.graphics.Color
+          import android.media.AudioFormat
+          import android.media.AudioManager
+          import android.media.AudioTrack
           import androidx.core.app.NotificationCompat
           import com.facebook.react.bridge.ReactApplicationContext
           import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -75,6 +78,37 @@ jobs:
               fun clearLight() {
                   val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                   notificationManager.cancel(1337)
+              }
+
+              @ReactMethod
+              fun playTone(frequency: Double, durationMs: Int) {
+                  Thread {
+                      try {
+                          val sampleRate = 44100
+                          val numSamples = durationMs * sampleRate / 1000
+                          val generatedSnd = ByteArray(2 * numSamples)
+                          for (i in 0 until numSamples) {
+                              val dVal = Math.sin(2 * Math.PI * i / (sampleRate / frequency))
+                              val valShort = (dVal * 32767).toInt().toShort()
+                              generatedSnd[2 * i] = (valShort.toInt() and 0x00ff).toByte()
+                              generatedSnd[2 * i + 1] = ((valShort.toInt() and 0xff00) ushr 8).toByte()
+                          }
+                          val audioTrack = AudioTrack(
+                              AudioManager.STREAM_MUSIC,
+                              sampleRate,
+                              AudioFormat.CHANNEL_OUT_MONO,
+                              AudioFormat.ENCODING_PCM_16BIT,
+                              generatedSnd.size,
+                              AudioTrack.MODE_STATIC
+                          )
+                          audioTrack.write(generatedSnd, 0, generatedSnd.size)
+                          audioTrack.play()
+                          Thread.sleep(durationMs.toLong())
+                          audioTrack.release()
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      }
+                  }.start()
               }
           }
           EOF
@@ -118,7 +152,8 @@ jobs:
 
           export default function App() {
             const [activeColor, setActiveColor] = useState('None');
-            const [delay, setDelay] = useState('5'); // Default 5 seconds delay
+            const [delay, setDelay] = useState('5');
+            const [playAudio, setPlayAudio] = useState(false);
 
             useEffect(() => {
               requestNotificationPermission();
@@ -137,15 +172,20 @@ jobs:
             const triggerColor = (name, hex) => {
               const delayMs = parseInt(delay, 10) * 1000 || 0;
               
+              const executeTrigger = () => {
+                PocoNotificationBacklight.triggerLight(hex, name);
+                if (playAudio) {
+                  // Plays a 20,000 Hz tone for 2000 milliseconds
+                  PocoNotificationBacklight.playTone(20000, 2000);
+                }
+                setActiveColor(name);
+              };
+
               if (delayMs > 0) {
                 setActiveColor(`Waiting ${delay}s for ${name}...`);
-                setTimeout(() => {
-                  PocoNotificationBacklight.triggerLight(hex, name);
-                  setActiveColor(name);
-                }, delayMs);
+                setTimeout(executeTrigger, delayMs);
               } else {
-                PocoNotificationBacklight.triggerLight(hex, name);
-                setActiveColor(name);
+                executeTrigger();
               }
             };
 
@@ -164,6 +204,13 @@ jobs:
                     placeholderTextColor="#6B7280"
                   />
                 </View>
+
+                <TouchableOpacity 
+                  style={[styles.toggleBtn, playAudio ? styles.bgGreen : styles.bgGray]} 
+                  onPress={() => setPlayAudio(!playAudio)}
+                >
+                  <Text style={styles.btnText}>Inaudible Tone (20kHz): {playAudio ? 'ON' : 'OFF'}</Text>
+                </TouchableOpacity>
 
                 <Text style={styles.subtitle}>Status: {activeColor}</Text>
                 <Text style={styles.warning}>*Lock the device screen immediately after pressing a color.</Text>
@@ -193,6 +240,8 @@ jobs:
             inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
             label: { color: 'white', fontSize: 16, marginRight: 10 },
             input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
+            toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '80%', alignItems: 'center' },
+            bgGray: { backgroundColor: '#4B5563' },
             subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 16 },
             warning: { color: '#EAB308', fontSize: 12, textAlign: 'center', marginBottom: 30 },
             row: { flexDirection: 'row', gap: 10 },
