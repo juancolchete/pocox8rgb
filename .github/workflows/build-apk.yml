@@ -175,8 +175,8 @@ jobs:
               const executeTrigger = () => {
                 PocoNotificationBacklight.triggerLight(hex, name);
                 if (playAudio) {
-                  // Plays a 20,000 Hz tone for 2000 milliseconds
-                  PocoNotificationBacklight.playTone(20000, 2000);
+                  // Plays an 800 Hz audible tone for 1000 milliseconds
+                  PocoNotificationBacklight.playTone(800, 1000);
                 }
                 setActiveColor(name);
               };
@@ -209,7 +209,7 @@ jobs:
                   style={[styles.toggleBtn, playAudio ? styles.bgGreen : styles.bgGray]} 
                   onPress={() => setPlayAudio(!playAudio)}
                 >
-                  <Text style={styles.btnText}>Inaudible Tone (20kHz): {playAudio ? 'ON' : 'OFF'}</Text>
+                  <Text style={styles.btnText}>Audible Tone: {playAudio ? 'ON' : 'OFF'}</Text>
                 </TouchableOpacity>
 
                 <Text style={styles.subtitle}>Status: {activeColor}</Text>
@@ -277,3 +277,4 @@ jobs:
           name: pocox8rgb-debug-apk
           path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
+          
