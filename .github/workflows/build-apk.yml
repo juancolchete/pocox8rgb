@@ -50,28 +50,42 @@ jobs:
               override fun getName() = "PocoNotificationBacklight"
 
               @ReactMethod
-              fun triggerLight(colorHex: String, colorName: String) {
-                  val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                  val channelId = "poco_led_${colorName.lowercase()}"
-                  val parsedColor = Color.parseColor(colorHex)
-                  if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(channelId, "$colorName LED", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                          enableLights(true)
-                          lightColor = parsedColor
-                          setSound(null, null)
-                          enableVibration(false)
+              fun triggerLight(colorHex: String, colorName: String, delayMs: Int, playAudio: Boolean) {
+                  // Spawn a native background thread that survives the app being minimized
+                  Thread {
+                      if (delayMs > 0) {
+                          Thread.sleep(delayMs.toLong())
                       }
-                      notificationManager.createNotificationChannel(channel)
-                  }
-                  val notification = NotificationCompat.Builder(reactApplicationContext, channelId)
-                      .setSmallIcon(android.R.drawable.ic_dialog_info)
-                      .setContentTitle("Backlight Active")
-                      .setContentText("Screen must be off to see $colorName")
-                      .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                      .setLights(parsedColor, 1000, 1000)
-                      .setAutoCancel(true)
-                      .build()
-                  notificationManager.notify(1337, notification)
+
+                      val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                      val channelId = "poco_led_${colorName.lowercase()}"
+                      val parsedColor = Color.parseColor(colorHex)
+                      
+                      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                          val channel = NotificationChannel(channelId, "$colorName LED", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                              enableLights(true)
+                              lightColor = parsedColor
+                              setSound(null, null)
+                              enableVibration(false)
+                          }
+                          notificationManager.createNotificationChannel(channel)
+                      }
+                      
+                      val notification = NotificationCompat.Builder(reactApplicationContext, channelId)
+                          .setSmallIcon(android.R.drawable.ic_dialog_info)
+                          .setContentTitle("Backlight Active")
+                          .setContentText("Triggered $colorName")
+                          .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                          .setLights(parsedColor, 1000, 1000)
+                          .setAutoCancel(true)
+                          .build()
+                          
+                      notificationManager.notify(1337, notification)
+
+                      if (playAudio) {
+                          playToneInternal(800.0, 1000)
+                      }
+                  }.start()
               }
 
               @ReactMethod
@@ -80,35 +94,32 @@ jobs:
                   notificationManager.cancel(1337)
               }
 
-              @ReactMethod
-              fun playTone(frequency: Double, durationMs: Int) {
-                  Thread {
-                      try {
-                          val sampleRate = 44100
-                          val numSamples = durationMs * sampleRate / 1000
-                          val generatedSnd = ByteArray(2 * numSamples)
-                          for (i in 0 until numSamples) {
-                              val dVal = Math.sin(2 * Math.PI * i / (sampleRate / frequency))
-                              val valShort = (dVal * 32767).toInt().toShort()
-                              generatedSnd[2 * i] = (valShort.toInt() and 0x00ff).toByte()
-                              generatedSnd[2 * i + 1] = ((valShort.toInt() and 0xff00) ushr 8).toByte()
-                          }
-                          val audioTrack = AudioTrack(
-                              AudioManager.STREAM_MUSIC,
-                              sampleRate,
-                              AudioFormat.CHANNEL_OUT_MONO,
-                              AudioFormat.ENCODING_PCM_16BIT,
-                              generatedSnd.size,
-                              AudioTrack.MODE_STATIC
-                          )
-                          audioTrack.write(generatedSnd, 0, generatedSnd.size)
-                          audioTrack.play()
-                          Thread.sleep(durationMs.toLong())
-                          audioTrack.release()
-                      } catch (e: Exception) {
-                          e.printStackTrace()
+              private fun playToneInternal(frequency: Double, durationMs: Int) {
+                  try {
+                      val sampleRate = 44100
+                      val numSamples = durationMs * sampleRate / 1000
+                      val generatedSnd = ByteArray(2 * numSamples)
+                      for (i in 0 until numSamples) {
+                          val dVal = Math.sin(2 * Math.PI * i / (sampleRate / frequency))
+                          val valShort = (dVal * 32767).toInt().toShort()
+                          generatedSnd[2 * i] = (valShort.toInt() and 0x00ff).toByte()
+                          generatedSnd[2 * i + 1] = ((valShort.toInt() and 0xff00) ushr 8).toByte()
                       }
-                  }.start()
+                      val audioTrack = AudioTrack(
+                          AudioManager.STREAM_MUSIC,
+                          sampleRate,
+                          AudioFormat.CHANNEL_OUT_MONO,
+                          AudioFormat.ENCODING_PCM_16BIT,
+                          generatedSnd.size,
+                          AudioTrack.MODE_STATIC
+                      )
+                      audioTrack.write(generatedSnd, 0, generatedSnd.size)
+                      audioTrack.play()
+                      Thread.sleep(durationMs.toLong())
+                      audioTrack.release()
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
               }
           }
           EOF
@@ -172,21 +183,14 @@ jobs:
             const triggerColor = (name, hex) => {
               const delayMs = parseInt(delay, 10) * 1000 || 0;
               
-              const executeTrigger = () => {
-                PocoNotificationBacklight.triggerLight(hex, name);
-                if (playAudio) {
-                  // Plays an 800 Hz audible tone for 1000 milliseconds
-                  PocoNotificationBacklight.playTone(800, 1000);
-                }
-                setActiveColor(name);
-              };
-
               if (delayMs > 0) {
-                setActiveColor(`Waiting ${delay}s for ${name}...`);
-                setTimeout(executeTrigger, delayMs);
+                setActiveColor(`Waiting ${delay}s for ${name}... (App can be backgrounded)`);
               } else {
-                executeTrigger();
+                setActiveColor(name);
               }
+              
+              // Offload the wait time and execution to the native Android OS
+              PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio);
             };
 
             return (
@@ -242,7 +246,7 @@ jobs:
             input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
             toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '80%', alignItems: 'center' },
             bgGray: { backgroundColor: '#4B5563' },
-            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 16 },
+            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 16, textAlign: 'center' },
             warning: { color: '#EAB308', fontSize: 12, textAlign: 'center', marginBottom: 30 },
             row: { flexDirection: 'row', gap: 10 },
             btn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
