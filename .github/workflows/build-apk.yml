@@ -51,7 +51,6 @@ jobs:
 
               @ReactMethod
               fun triggerLight(colorHex: String, colorName: String, delayMs: Int, playAudio: Boolean) {
-                  // Spawn a native background thread that survives the app being minimized
                   Thread {
                       if (delayMs > 0) {
                           Thread.sleep(delayMs.toLong())
@@ -92,6 +91,13 @@ jobs:
               fun clearLight() {
                   val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                   notificationManager.cancel(1337)
+              }
+
+              @ReactMethod
+              fun playTone(frequency: Double, durationMs: Int) {
+                  Thread {
+                      playToneInternal(frequency, durationMs)
+                  }.start()
               }
 
               private fun playToneInternal(frequency: Double, durationMs: Int) {
@@ -151,13 +157,13 @@ jobs:
           sed -i '/PackageList(this).packages/a \ \ \ \ \ \ \ \ \ \ add(PocoNotificationPackage())' pocox8rgb/android/app/src/main/java/com/pocox8rgb/MainApplication.kt
           
           # Inject Permissions
-          sed -i '/<application/i \ \ \ \ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n\ \ \ \ <uses-permission android:name="android.permission.FLASHLIGHT" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
+          sed -i '/<application/i \ \ \ \ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n\ \ \ \ <uses-permission android:name="android.permission.FLASHLIGHT" />\n\ \ \ \ <uses-permission android:name="android.permission.INTERNET" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
 
       - name: Inject React Native App.tsx
         run: |
           cat << 'EOF' > pocox8rgb/App.tsx
           import React, { useState, useEffect } from 'react';
-          import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet, TextInput } from 'react-native';
+          import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet, TextInput, ScrollView } from 'react-native';
 
           const { PocoNotificationBacklight } = NativeModules;
 
@@ -165,6 +171,7 @@ jobs:
             const [activeColor, setActiveColor] = useState('None');
             const [delay, setDelay] = useState('5');
             const [playAudio, setPlayAudio] = useState(false);
+            const [apiLink, setApiLink] = useState('https://api.github.com/users/octocat/events/public');
 
             useEffect(() => {
               requestNotificationPermission();
@@ -180,23 +187,59 @@ jobs:
               }
             };
 
+            const checkCommits = async () => {
+              setActiveColor('Fetching link data...');
+              try {
+                const response = await fetch(apiLink);
+                const data = await response.text();
+                
+                // Customize this logic based on exactly what your link returns.
+                // Currently checks if response is literally "0" or contains typical 0-commit JSON signatures.
+                const isZero = data.trim() === '0' || data.includes('"total":0') || data.includes('"commits":0') || data === '[]';
+
+                if (isZero) {
+                  setActiveColor('0 Commits Detected! Playing alert.');
+                  PocoNotificationBacklight.playTone(800, 1000); // Play audible beep
+                  PocoNotificationBacklight.triggerLight('#FF0000', 'Red', 0, true); // Flash Red
+                } else {
+                  setActiveColor('Commits found. No alert needed.');
+                }
+              } catch (error) {
+                setActiveColor('Error fetching link.');
+              }
+            };
+
             const triggerColor = (name, hex) => {
               const delayMs = parseInt(delay, 10) * 1000 || 0;
-              
               if (delayMs > 0) {
-                setActiveColor(`Waiting ${delay}s for ${name}... (App can be backgrounded)`);
+                setActiveColor(`Waiting ${delay}s for ${name}...`);
               } else {
                 setActiveColor(name);
               }
-              
-              // Offload the wait time and execution to the native Android OS
               PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio);
             };
 
             return (
-              <View style={styles.container}>
-                <Text style={styles.title}>POCO X8 Pro Max Notification LED</Text>
+              <ScrollView contentContainerStyle={styles.container}>
+                <Text style={styles.title}>POCO X8 Pro Max Controller</Text>
                 
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Commit Checker</Text>
+                  <TextInput
+                    style={styles.urlInput}
+                    value={apiLink}
+                    onChangeText={setApiLink}
+                    placeholder="Paste link here..."
+                    placeholderTextColor="#6B7280"
+                  />
+                  <TouchableOpacity style={styles.fetchBtn} onPress={checkCommits}>
+                    <Text style={styles.btnText}>Check Link Now</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.divider} />
+
+                <Text style={styles.cardTitle}>Manual LED Control</Text>
                 <View style={styles.inputContainer}>
                   <Text style={styles.label}>Delay (seconds):</Text>
                   <TextInput
@@ -234,13 +277,18 @@ jobs:
                 <TouchableOpacity style={styles.clearBtn} onPress={() => { PocoNotificationBacklight.clearLight(); setActiveColor('Off'); }}>
                   <Text style={styles.btnText}>Clear Notification</Text>
                 </TouchableOpacity>
-              </View>
+              </ScrollView>
             );
           }
 
           const styles = StyleSheet.create({
-            container: { flex: 1, backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center', padding: 20 },
+            container: { flexGrow: 1, backgroundColor: '#111827', alignItems: 'center', paddingVertical: 40, paddingHorizontal: 20 },
             title: { fontSize: 24, fontWeight: 'bold', color: 'white', marginBottom: 20, textAlign: 'center' },
+            card: { width: '100%', backgroundColor: '#1F2937', padding: 20, borderRadius: 12, alignItems: 'center', marginBottom: 20 },
+            cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
+            urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15 },
+            fetchBtn: { backgroundColor: '#8B5CF6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
+            divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
             inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
             label: { color: 'white', fontSize: 16, marginRight: 10 },
             input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
