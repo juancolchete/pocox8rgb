@@ -29,16 +29,13 @@ jobs:
           cd pocox8rgb
           npm install
 
-      - name: Auto-Increment App Version & Add WorkManager
+      - name: Auto-Increment App Version
         run: |
-          # Bumps the Android versionCode and versionName dynamically based on the GitHub Action run number
+          # Bumps the Android versionCode and versionName dynamically
           sed -i "s/versionCode 1/versionCode ${GITHUB_RUN_NUMBER}/" pocox8rgb/android/app/build.gradle
           sed -i "s/versionName \"1.0\"/versionName \"1.${GITHUB_RUN_NUMBER}\"/" pocox8rgb/android/app/build.gradle
-          
-          # Inject Android WorkManager dependency for native background tasks
-          sed -i '/dependencies {/a \ \ \ \ implementation("androidx.work:work-runtime:2.9.0")' pocox8rgb/android/app/build.gradle
 
-      - name: Inject Kotlin Native Module & Background Worker
+      - name: Inject Kotlin Native Module
         run: |
           mkdir -p pocox8rgb/android/app/src/main/java/com/pocox8rgb
           cat << 'EOF' > pocox8rgb/android/app/src/main/java/com/pocox8rgb/PocoNotificationModule.kt
@@ -47,47 +44,36 @@ jobs:
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.content.Context
+          import android.content.Intent
           import android.graphics.Color
           import android.media.AudioFormat
           import android.media.AudioManager
           import android.media.AudioTrack
           import androidx.core.app.NotificationCompat
-          import androidx.work.Data
-          import androidx.work.ExistingPeriodicWorkPolicy
-          import androidx.work.PeriodicWorkRequestBuilder
-          import androidx.work.WorkManager
-          import androidx.work.Worker
-          import androidx.work.WorkerParameters
           import com.facebook.react.bridge.ReactApplicationContext
           import com.facebook.react.bridge.ReactContextBaseJavaModule
           import com.facebook.react.bridge.ReactMethod
-          import java.util.concurrent.TimeUnit
-          import java.net.HttpURLConnection
-          import java.net.URL
 
           class PocoNotificationModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
               override fun getName() = "PocoNotificationBacklight"
 
               @ReactMethod
-              fun startBackgroundCheck(url: String, intervalMinutes: Int) {
-                  // Android clamps this to a minimum of 15 minutes
-                  val safeInterval = if (intervalMinutes < 15) 15 else intervalMinutes
-                  
-                  val inputData = Data.Builder().putString("url", url).build()
-                  val workRequest = PeriodicWorkRequestBuilder<CommitWorker>(safeInterval.toLong(), TimeUnit.MINUTES)
-                      .setInputData(inputData)
-                      .build()
-                      
-                  WorkManager.getInstance(reactApplicationContext).enqueueUniquePeriodicWork(
-                      "CommitCheckBackground",
-                      ExistingPeriodicWorkPolicy.KEEP,
-                      workRequest
-                  )
+              fun startBackgroundCheck(url: String, intervalSeconds: Int) {
+                  val intent = Intent(reactApplicationContext, CommitService::class.java).apply {
+                      putExtra("URL", url)
+                      putExtra("INTERVAL", intervalSeconds)
+                  }
+                  if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                      reactApplicationContext.startForegroundService(intent)
+                  } else {
+                      reactApplicationContext.startService(intent)
+                  }
               }
 
               @ReactMethod
               fun stopBackgroundCheck() {
-                  WorkManager.getInstance(reactApplicationContext).cancelUniqueWork("CommitCheckBackground")
+                  val intent = Intent(reactApplicationContext, CommitService::class.java)
+                  reactApplicationContext.stopService(intent)
               }
 
               @ReactMethod
@@ -102,7 +88,6 @@ jobs:
               fun clearLight() {
                   val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                   notificationManager.cancel(1337)
-                  notificationManager.cancel(1338)
               }
 
               @ReactMethod
@@ -169,11 +154,53 @@ jobs:
                   }
               }
           }
+          EOF
 
-          // The Native Android Background Worker
-          class CommitWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
-              override fun doWork(): Result {
-                  val urlString = inputData.getString("url") ?: return Result.failure()
+      - name: Inject Foreground Service Class
+        run: |
+          cat << 'EOF' > pocox8rgb/android/app/src/main/java/com/pocox8rgb/CommitService.kt
+          package com.pocox8rgb
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.os.IBinder
+          import androidx.core.app.NotificationCompat
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          class CommitService : Service() {
+              @Volatile private var isRunning = false
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  val urlString = intent?.getStringExtra("URL") ?: return START_NOT_STICKY
+                  val interval = intent.getIntExtra("INTERVAL", 30) // Default 30 seconds
+
+                  createNotificationChannel()
+                  val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
+                      .setContentTitle("POCO X8 Controller")
+                      .setContentText("Checking link every $interval seconds...")
+                      .setSmallIcon(android.R.drawable.ic_dialog_info)
+                      .setPriority(NotificationCompat.PRIORITY_LOW)
+                      .build()
+
+                  startForeground(999, notification)
+
+                  if (!isRunning) {
+                      isRunning = true
+                      thread {
+                          while (isRunning) {
+                              checkCommits(urlString)
+                              Thread.sleep(interval * 1000L)
+                          }
+                      }
+                  }
+                  return START_STICKY
+              }
+
+              private fun checkCommits(urlString: String) {
                   try {
                       val url = URL(urlString)
                       val connection = url.openConnection() as HttpURLConnection
@@ -188,11 +215,21 @@ jobs:
                               PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "Red Background", true)
                           }
                       }
-                  } catch (e: Exception) {
-                      e.printStackTrace()
-                      return Result.retry()
+                  } catch (e: Exception) { e.printStackTrace() }
+              }
+
+              override fun onDestroy() {
+                  isRunning = false
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+
+              private fun createNotificationChannel() {
+                  if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                      val channel = NotificationChannel("ForegroundServiceChannel", "Background Service", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
                   }
-                  return Result.success()
               }
           }
           EOF
@@ -210,6 +247,176 @@ jobs:
 
           class PocoNotificationPackage : ReactPackage {
               override fun createNativeModules(reactContext: ReactApplicationContext): MutableList<NativeModule> {
+                  return mutableListOf(PocoNotificationModule(reactContext))
+              }
+              override fun createViewManagers(reactContext: ReactApplicationContext): MutableList<ViewManager<View, ReactShadowNode<*>>> {
+                  return mutableListOf()
+              }
+          }
+          EOF
+
+      - name: Modify MainApplication.kt & AndroidManifest.xml
+        run: |
+          # Inject Package Registration
+          sed -i '/PackageList(this).packages/a \ \ \ \ \ \ \ \ \ \ add(PocoNotificationPackage())' pocox8rgb/android/app/src/main/java/com/pocox8rgb/MainApplication.kt
+          
+          # Inject Permissions (Foreground Service requires extra permissions in modern Android)
+          sed -i '/<application/i \ \ \ \ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n\ \ \ \ <uses-permission android:name="android.permission.FLASHLIGHT" />\n\ \ \ \ <uses-permission android:name="android.permission.INTERNET" />\n\ \ \ \ <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n\ \ \ \ <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
+          
+          # Inject Service declaration inside <application>
+          sed -i '/<\/application>/i \ \ \ \ \ \ \ \ <service android:name=".CommitService" android:foregroundServiceType="dataSync" android:exported="false" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
+
+      - name: Inject React Native App.tsx
+        run: |
+          cat << 'EOF' > pocox8rgb/App.tsx
+          import React, { useState, useEffect } from 'react';
+          import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet, TextInput, ScrollView } from 'react-native';
+
+          const { PocoNotificationBacklight } = NativeModules;
+
+          export default function App() {
+            const [activeColor, setActiveColor] = useState('None');
+            const [delay, setDelay] = useState('0');
+            const [pollInterval, setPollInterval] = useState('30'); // New: User can define polling interval in seconds
+            const [playAudio, setPlayAudio] = useState(false);
+            const [apiLink, setApiLink] = useState('https://api.github.com/users/octocat/events/public');
+            const [bgStatus, setBgStatus] = useState('Stopped');
+
+            useEffect(() => {
+              requestNotificationPermission();
+            }, []);
+
+            const requestNotificationPermission = async () => {
+              if (Platform.OS === 'android' && Platform.Version >= 33) {
+                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+              }
+            };
+
+            const checkCommitsNow = async () => {
+              setActiveColor('Fetching link data...');
+              try {
+                const response = await fetch(apiLink);
+                const data = await response.text();
+                
+                const isZero = data.trim() === '0' || data.includes('"total":0') || data.includes('"commits":0') || data === '[]';
+
+                if (isZero) {
+                  setActiveColor('0 Commits! Playing alert.');
+                  PocoNotificationBacklight.playTone(800, 1000); 
+                  PocoNotificationBacklight.triggerLight('#FF0000', 'Red', 0, true); 
+                } else {
+                  setActiveColor('Commits found. No alert needed.');
+                }
+              } catch (error) {
+                setActiveColor('Error fetching link.');
+              }
+            };
+
+            const startBackground = () => {
+              const intervalSecs = parseInt(pollInterval, 10) || 30;
+              PocoNotificationBacklight.startBackgroundCheck(apiLink, intervalSecs);
+              setBgStatus(`Running (Checks every ${intervalSecs}s)`);
+            };
+
+            const stopBackground = () => {
+              PocoNotificationBacklight.stopBackgroundCheck();
+              setBgStatus('Stopped');
+            };
+
+            const triggerColor = (name, hex) => {
+              const delayMs = parseInt(delay, 10) * 1000 || 0;
+              setActiveColor(delayMs > 0 ? `Waiting ${delay}s...` : name);
+              PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio);
+            };
+
+            return (
+              <ScrollView contentContainerStyle={styles.container}>
+                <Text style={styles.title}>POCO X8 Core - Foreground Worker</Text>
+                
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Commit Checker</Text>
+                  <TextInput
+                    style={styles.urlInput}
+                    value={apiLink}
+                    onChangeText={setApiLink}
+                    placeholder="Paste link here..."
+                    placeholderTextColor="#6B7280"
+                  />
+                  <TouchableOpacity style={styles.fetchBtn} onPress={checkCommitsNow}>
+                    <Text style={styles.btnText}>Check Link Now (Foreground)</Text>
+                  </TouchableOpacity>
+                  
+                  <View style={styles.divider} />
+                  
+                  <Text style={styles.cardTitle}>Background Polling</Text>
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.label}>Check every (sec):</Text>
+                    <TextInput
+                      style={styles.input}
+                      keyboardType="numeric"
+                      value={pollInterval}
+                      onChangeText={setPollInterval}
+                      placeholder="30"
+                      placeholderTextColor="#6B7280"
+                    />
+                  </View>
+                  
+                  <Text style={styles.subtitle}>Status: {bgStatus}</Text>
+                  <View style={styles.row}>
+                    <TouchableOpacity style={[styles.btn, styles.bgGreen]} onPress={startBackground}>
+                      <Text style={styles.btnText}>Start Persistent Worker</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={stopBackground}>
+                      <Text style={styles.btnText}>Stop</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.dividerMain} />
+
+                <Text style={styles.cardTitle}>Manual LED Control</Text>
+                <View style={styles.inputContainer}>
+                  <Text style={styles.label}>Delay (sec):</Text>
+                  <TextInput
+                    style={styles.input}
+                    keyboardType="numeric"
+                    value={delay}
+                    onChangeText={setDelay}
+                    placeholder="0"
+                    placeholderTextColor="#6B7280"
+                  />
+                </View>
+
+                <TouchableOpacity 
+                  style={[styles.toggleBtn, playAudio ? styles.bgGreen : styles.bgGray]} 
+                  onPress={() => setPlayAudio(!playAudio)}
+                >
+                  <Text style={styles.btnText}>Audible Tone: {playAudio ? 'ON' : 'OFF'}</Text>
+                </TouchableOpacity>
+
+                <Text style={styles.subtitle}>Status: {activeColor}</Text>
+                
+                <View style={styles.row}>
+                  <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={() => triggerColor('Red', '#FF0000')}>
+                    <Text style={styles.btnText}>Red</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.btn, styles.bgGreen]} onPress={() => triggerColor('Green', '#00FF00')}>
+                    <Text style={styles.btnText}>Green</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.btn, styles.bgBlue]} onPress={() => triggerColor('Blue', '#0000FF')}>
+                    <Text style={styles.btnText}>Blue</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity style={styles.clearBtn} onPress={() => { PocoNotificationBacklight.clearLight(); setActiveColor('Off'); }}>
+                  <Text style={styles.btnText}>Clear Lights & Sounds</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            );
+          }
+
+          const styles = StyleSheet.create({
+            container: { flexGrow: 1, backgroundColor: '#111827', alignItems: 'center', paddingVertical: 40, paddingHorizont     override fun createNativeModules(reactContext: ReactApplicationContext): MutableList<NativeModule> {
                   return mutableListOf(PocoNotificationModule(reactContext))
               }
               override fun createViewManagers(reactContext: ReactApplicationContext): MutableList<ViewManager<View, ReactShadowNode<*>>> {
