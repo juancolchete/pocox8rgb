@@ -29,11 +29,21 @@ jobs:
           cd pocox8rgb
           npm install
 
-      - name: Inject Kotlin Native Module
+      - name: Auto-Increment App Version & Add WorkManager
+        run: |
+          # Bumps the Android versionCode and versionName dynamically based on the GitHub Action run number
+          sed -i "s/versionCode 1/versionCode ${GITHUB_RUN_NUMBER}/" pocox8rgb/android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"1.${GITHUB_RUN_NUMBER}\"/" pocox8rgb/android/app/build.gradle
+          
+          # Inject Android WorkManager dependency for native background tasks
+          sed -i '/dependencies {/a \ \ \ \ implementation("androidx.work:work-runtime:2.9.0")' pocox8rgb/android/app/build.gradle
+
+      - name: Inject Kotlin Native Module & Background Worker
         run: |
           mkdir -p pocox8rgb/android/app/src/main/java/com/pocox8rgb
           cat << 'EOF' > pocox8rgb/android/app/src/main/java/com/pocox8rgb/PocoNotificationModule.kt
           package com.pocox8rgb
+          
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.content.Context
@@ -42,23 +52,69 @@ jobs:
           import android.media.AudioManager
           import android.media.AudioTrack
           import androidx.core.app.NotificationCompat
+          import androidx.work.Data
+          import androidx.work.ExistingPeriodicWorkPolicy
+          import androidx.work.PeriodicWorkRequestBuilder
+          import androidx.work.WorkManager
+          import androidx.work.Worker
+          import androidx.work.WorkerParameters
           import com.facebook.react.bridge.ReactApplicationContext
           import com.facebook.react.bridge.ReactContextBaseJavaModule
           import com.facebook.react.bridge.ReactMethod
+          import java.util.concurrent.TimeUnit
+          import java.net.HttpURLConnection
+          import java.net.URL
 
           class PocoNotificationModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
               override fun getName() = "PocoNotificationBacklight"
 
               @ReactMethod
+              fun startBackgroundCheck(url: String, intervalMinutes: Int) {
+                  // Android clamps this to a minimum of 15 minutes
+                  val safeInterval = if (intervalMinutes < 15) 15 else intervalMinutes
+                  
+                  val inputData = Data.Builder().putString("url", url).build()
+                  val workRequest = PeriodicWorkRequestBuilder<CommitWorker>(safeInterval.toLong(), TimeUnit.MINUTES)
+                      .setInputData(inputData)
+                      .build()
+                      
+                  WorkManager.getInstance(reactApplicationContext).enqueueUniquePeriodicWork(
+                      "CommitCheckBackground",
+                      ExistingPeriodicWorkPolicy.KEEP,
+                      workRequest
+                  )
+              }
+
+              @ReactMethod
+              fun stopBackgroundCheck() {
+                  WorkManager.getInstance(reactApplicationContext).cancelUniqueWork("CommitCheckBackground")
+              }
+
+              @ReactMethod
               fun triggerLight(colorHex: String, colorName: String, delayMs: Int, playAudio: Boolean) {
                   Thread {
-                      if (delayMs > 0) {
-                          Thread.sleep(delayMs.toLong())
-                      }
+                      if (delayMs > 0) Thread.sleep(delayMs.toLong())
+                      triggerHardwareAlert(reactApplicationContext, colorHex, colorName, playAudio)
+                  }.start()
+              }
 
-                      val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+              @ReactMethod
+              fun clearLight() {
+                  val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                  notificationManager.cancel(1337)
+                  notificationManager.cancel(1338)
+              }
+
+              @ReactMethod
+              fun playTone(frequency: Double, durationMs: Int) {
+                  Thread { playToneInternal(frequency, durationMs) }.start()
+              }
+
+              companion object {
+                  fun triggerHardwareAlert(context: Context, colorHex: String, colorName: String, playAudio: Boolean) {
+                      val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                       val channelId = "poco_led_${colorName.lowercase()}"
-                      val parsedColor = Color.parseColor(colorHex)
+                      val parsedColor = try { Color.parseColor(colorHex) } catch (e: Exception) { Color.RED }
                       
                       if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                           val channel = NotificationChannel(channelId, "$colorName LED", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -70,7 +126,7 @@ jobs:
                           notificationManager.createNotificationChannel(channel)
                       }
                       
-                      val notification = NotificationCompat.Builder(reactApplicationContext, channelId)
+                      val notification = NotificationCompat.Builder(context, channelId)
                           .setSmallIcon(android.R.drawable.ic_dialog_info)
                           .setContentTitle("Backlight Active")
                           .setContentText("Triggered $colorName")
@@ -84,48 +140,59 @@ jobs:
                       if (playAudio) {
                           playToneInternal(800.0, 1000)
                       }
-                  }.start()
-              }
+                  }
 
-              @ReactMethod
-              fun clearLight() {
-                  val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                  notificationManager.cancel(1337)
+                  fun playToneInternal(frequency: Double, durationMs: Int) {
+                      try {
+                          val sampleRate = 44100
+                          val numSamples = durationMs * sampleRate / 1000
+                          val generatedSnd = ByteArray(2 * numSamples)
+                          for (i in 0 until numSamples) {
+                              val dVal = Math.sin(2 * Math.PI * i / (sampleRate / frequency))
+                              val valShort = (dVal * 32767).toInt().toShort()
+                              generatedSnd[2 * i] = (valShort.toInt() and 0x00ff).toByte()
+                              generatedSnd[2 * i + 1] = ((valShort.toInt() and 0xff00) ushr 8).toByte()
+                          }
+                          val audioTrack = AudioTrack(
+                              AudioManager.STREAM_MUSIC,
+                              sampleRate,
+                              AudioFormat.CHANNEL_OUT_MONO,
+                              AudioFormat.ENCODING_PCM_16BIT,
+                              generatedSnd.size,
+                              AudioTrack.MODE_STATIC
+                          )
+                          audioTrack.write(generatedSnd, 0, generatedSnd.size)
+                          audioTrack.play()
+                          Thread.sleep(durationMs.toLong())
+                          audioTrack.release()
+                      } catch (e: Exception) { e.printStackTrace() }
+                  }
               }
+          }
 
-              @ReactMethod
-              fun playTone(frequency: Double, durationMs: Int) {
-                  Thread {
-                      playToneInternal(frequency, durationMs)
-                  }.start()
-              }
-
-              private fun playToneInternal(frequency: Double, durationMs: Int) {
+          // The Native Android Background Worker
+          class CommitWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+              override fun doWork(): Result {
+                  val urlString = inputData.getString("url") ?: return Result.failure()
                   try {
-                      val sampleRate = 44100
-                      val numSamples = durationMs * sampleRate / 1000
-                      val generatedSnd = ByteArray(2 * numSamples)
-                      for (i in 0 until numSamples) {
-                          val dVal = Math.sin(2 * Math.PI * i / (sampleRate / frequency))
-                          val valShort = (dVal * 32767).toInt().toShort()
-                          generatedSnd[2 * i] = (valShort.toInt() and 0x00ff).toByte()
-                          generatedSnd[2 * i + 1] = ((valShort.toInt() and 0xff00) ushr 8).toByte()
+                      val url = URL(urlString)
+                      val connection = url.openConnection() as HttpURLConnection
+                      connection.requestMethod = "GET"
+                      
+                      if (connection.responseCode == 200) {
+                          val data = connection.inputStream.bufferedReader().readText()
+                          val isZero = data.trim() == "0" || data.contains("\"total\":0") || data.contains("\"commits\":0") || data == "[]"
+                          
+                          if (isZero) {
+                              // Trigger Red LED and Audible Beep from the background
+                              PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "Red Background", true)
+                          }
                       }
-                      val audioTrack = AudioTrack(
-                          AudioManager.STREAM_MUSIC,
-                          sampleRate,
-                          AudioFormat.CHANNEL_OUT_MONO,
-                          AudioFormat.ENCODING_PCM_16BIT,
-                          generatedSnd.size,
-                          AudioTrack.MODE_STATIC
-                      )
-                      audioTrack.write(generatedSnd, 0, generatedSnd.size)
-                      audioTrack.play()
-                      Thread.sleep(durationMs.toLong())
-                      audioTrack.release()
                   } catch (e: Exception) {
                       e.printStackTrace()
+                      return Result.retry()
                   }
+                  return Result.success()
               }
           }
           EOF
@@ -169,9 +236,10 @@ jobs:
 
           export default function App() {
             const [activeColor, setActiveColor] = useState('None');
-            const [delay, setDelay] = useState('5');
+            const [delay, setDelay] = useState('0');
             const [playAudio, setPlayAudio] = useState(false);
             const [apiLink, setApiLink] = useState('https://api.github.com/users/octocat/events/public');
+            const [bgStatus, setBgStatus] = useState('Stopped');
 
             useEffect(() => {
               requestNotificationPermission();
@@ -179,28 +247,22 @@ jobs:
 
             const requestNotificationPermission = async () => {
               if (Platform.OS === 'android' && Platform.Version >= 33) {
-                try {
-                  await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-                } catch (err) {
-                  console.warn(err);
-                }
+                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
               }
             };
 
-            const checkCommits = async () => {
+            const checkCommitsNow = async () => {
               setActiveColor('Fetching link data...');
               try {
                 const response = await fetch(apiLink);
                 const data = await response.text();
                 
-                // Customize this logic based on exactly what your link returns.
-                // Currently checks if response is literally "0" or contains typical 0-commit JSON signatures.
                 const isZero = data.trim() === '0' || data.includes('"total":0') || data.includes('"commits":0') || data === '[]';
 
                 if (isZero) {
-                  setActiveColor('0 Commits Detected! Playing alert.');
-                  PocoNotificationBacklight.playTone(800, 1000); // Play audible beep
-                  PocoNotificationBacklight.triggerLight('#FF0000', 'Red', 0, true); // Flash Red
+                  setActiveColor('0 Commits! Playing alert.');
+                  PocoNotificationBacklight.playTone(800, 1000); 
+                  PocoNotificationBacklight.triggerLight('#FF0000', 'Red', 0, true); 
                 } else {
                   setActiveColor('Commits found. No alert needed.');
                 }
@@ -209,19 +271,25 @@ jobs:
               }
             };
 
+            const startBackground = () => {
+              PocoNotificationBacklight.startBackgroundCheck(apiLink, 15);
+              setBgStatus('Running (Checks every ~15m)');
+            };
+
+            const stopBackground = () => {
+              PocoNotificationBacklight.stopBackgroundCheck();
+              setBgStatus('Stopped');
+            };
+
             const triggerColor = (name, hex) => {
               const delayMs = parseInt(delay, 10) * 1000 || 0;
-              if (delayMs > 0) {
-                setActiveColor(`Waiting ${delay}s for ${name}...`);
-              } else {
-                setActiveColor(name);
-              }
+              setActiveColor(delayMs > 0 ? `Waiting ${delay}s...` : name);
               PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio);
             };
 
             return (
               <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>POCO X8 Pro Max Controller</Text>
+                <Text style={styles.title}>POCO X8 Core - v1.0</Text>
                 
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Commit Checker</Text>
@@ -232,16 +300,28 @@ jobs:
                     placeholder="Paste link here..."
                     placeholderTextColor="#6B7280"
                   />
-                  <TouchableOpacity style={styles.fetchBtn} onPress={checkCommits}>
-                    <Text style={styles.btnText}>Check Link Now</Text>
+                  <TouchableOpacity style={styles.fetchBtn} onPress={checkCommitsNow}>
+                    <Text style={styles.btnText}>Check Link Now (Foreground)</Text>
                   </TouchableOpacity>
+                  
+                  <View style={styles.divider} />
+                  
+                  <Text style={styles.subtitle}>Background Status: {bgStatus}</Text>
+                  <View style={styles.row}>
+                    <TouchableOpacity style={[styles.btn, styles.bgGreen]} onPress={startBackground}>
+                      <Text style={styles.btnText}>Start Worker</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={stopBackground}>
+                      <Text style={styles.btnText}>Stop</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
-                <View style={styles.divider} />
+                <View style={styles.dividerMain} />
 
                 <Text style={styles.cardTitle}>Manual LED Control</Text>
                 <View style={styles.inputContainer}>
-                  <Text style={styles.label}>Delay (seconds):</Text>
+                  <Text style={styles.label}>Delay (sec):</Text>
                   <TextInput
                     style={styles.input}
                     keyboardType="numeric"
@@ -260,7 +340,6 @@ jobs:
                 </TouchableOpacity>
 
                 <Text style={styles.subtitle}>Status: {activeColor}</Text>
-                <Text style={styles.warning}>*Lock the device screen immediately after pressing a color.</Text>
                 
                 <View style={styles.row}>
                   <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={() => triggerColor('Red', '#FF0000')}>
@@ -275,7 +354,7 @@ jobs:
                 </View>
 
                 <TouchableOpacity style={styles.clearBtn} onPress={() => { PocoNotificationBacklight.clearLight(); setActiveColor('Off'); }}>
-                  <Text style={styles.btnText}>Clear Notification</Text>
+                  <Text style={styles.btnText}>Clear Lights & Sounds</Text>
                 </TouchableOpacity>
               </ScrollView>
             );
@@ -288,20 +367,20 @@ jobs:
             cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
             urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15 },
             fetchBtn: { backgroundColor: '#8B5CF6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
-            divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
+            divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 15 },
+            dividerMain: { height: 2, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
             inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
             label: { color: 'white', fontSize: 16, marginRight: 10 },
             input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
             toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '80%', alignItems: 'center' },
             bgGray: { backgroundColor: '#4B5563' },
-            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 16, textAlign: 'center' },
-            warning: { color: '#EAB308', fontSize: 12, textAlign: 'center', marginBottom: 30 },
+            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 14, textAlign: 'center' },
             row: { flexDirection: 'row', gap: 10 },
-            btn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+            btn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 },
             bgRed: { backgroundColor: '#EF4444' },
             bgGreen: { backgroundColor: '#22C55E' },
             bgBlue: { backgroundColor: '#3B82F6' },
-            btnText: { color: 'white', fontWeight: 'bold' },
+            btnText: { color: 'white', fontWeight: 'bold', textAlign: 'center' },
             clearBtn: { marginTop: 30, backgroundColor: '#374151', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 30, borderWidth: 1, borderColor: '#4B5563' }
           });
           EOF
@@ -326,7 +405,6 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pocox8rgb-debug-apk
+          name: pocox8rgb-debug-apk-v${{ github.run_number }}
           path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
-          
