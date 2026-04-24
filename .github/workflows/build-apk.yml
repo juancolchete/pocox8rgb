@@ -88,6 +88,7 @@ jobs:
               fun clearLight() {
                   val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                   notificationManager.cancel(1337)
+                  notificationManager.cancel(1338)
               }
 
               @ReactMethod
@@ -99,7 +100,7 @@ jobs:
                   fun triggerHardwareAlert(context: Context, colorHex: String, colorName: String, playAudio: Boolean) {
                       val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                       val channelId = "poco_led_${colorName.lowercase()}"
-                      val parsedColor = try { Color.parseColor(colorHex) } catch (e: Exception) { Color.GREEN }
+                      val parsedColor = try { Color.parseColor(colorHex) } catch (e: Exception) { Color.RED }
                       
                       if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                           val channel = NotificationChannel(channelId, "$colorName LED", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -113,9 +114,9 @@ jobs:
                       
                       val notification = NotificationCompat.Builder(context, channelId)
                           .setSmallIcon(android.R.drawable.ic_dialog_info)
-                          .setContentTitle("Backlight Active")
-                          .setContentText("Triggered $colorName")
-                          .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                          .setContentTitle("Hardware Alert Active")
+                          .setContentText("Triggered $colorName LED")
+                          .setPriority(NotificationCompat.PRIORITY_HIGH)
                           .setLights(parsedColor, 1000, 1000)
                           .setAutoCancel(true)
                           .build()
@@ -181,7 +182,7 @@ jobs:
                   createNotificationChannel()
                   val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
                       .setContentTitle("POCO X8 Controller")
-                      .setContentText("Checking for >0 commits every $interval seconds...")
+                      .setContentText("Checking commits every $interval seconds...")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setPriority(NotificationCompat.PRIORITY_LOW)
                       .build()
@@ -208,14 +209,25 @@ jobs:
                       
                       if (connection.responseCode == 200) {
                           val data = connection.inputStream.bufferedReader().readText()
-                          
-                          // Safely parse the first number found in the markdown/text file
                           val match = Regex("\\d+").find(data)
+                          
                           if (match != null) {
-                              val commits = match.value.toInt()
-                              if (commits > 0) {
-                                  // Trigger Green LED and Audible Beep from the background
-                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#00FF00", "Green Background", true)
+                              val count = match.value.toInt()
+                              if (count == 0) {
+                                  // 0 Commits: Fire the hardware LED and Sound Alert
+                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "0 Commits Alert", true)
+                              } else {
+                                  // > 0 Commits: Skip hardware alert, just send a standard notification
+                                  val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                                  val notification = NotificationCompat.Builder(applicationContext, "ForegroundServiceChannel")
+                                      .setSmallIcon(android.R.drawable.ic_dialog_info)
+                                      .setContentTitle("Commit Reminder")
+                                      .setContentText("Total to commit: $count")
+                                      .setStyle(NotificationCompat.BigTextStyle().bigText(data)) // Expands to show full message
+                                      .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                                      .setAutoCancel(true)
+                                      .build()
+                                  notificationManager.notify(1338, notification)
                               }
                           }
                       }
@@ -282,6 +294,7 @@ jobs:
             const [playAudio, setPlayAudio] = useState(false);
             const [apiLink, setApiLink] = useState('https://raw.githubusercontent.com/juancolchete/reminderActions/refs/heads/main/dailyCommit.md');
             const [bgStatus, setBgStatus] = useState('Stopped');
+            const [fileContent, setFileContent] = useState('');
 
             useEffect(() => {
               requestNotificationPermission();
@@ -295,21 +308,23 @@ jobs:
 
             const checkCommitsNow = async () => {
               setActiveColor('Fetching link data...');
+              setFileContent('');
               try {
                 const response = await fetch(apiLink);
                 const data = await response.text();
                 
-                // Use Regex to find the first number in the markdown file
+                setFileContent(data); // Render the file content right below the code
                 const match = data.match(/\d+/);
                 
                 if (match) {
-                  const commits = parseInt(match[0], 10);
-                  if (commits > 0) {
-                    setActiveColor(`${commits} Commits! Playing alert.`);
+                  const count = parseInt(match[0], 10);
+                  if (count === 0) {
+                    setActiveColor('0 Commits! Playing hardware alert.');
                     PocoNotificationBacklight.playTone(800, 1000); 
-                    PocoNotificationBacklight.triggerLight('#00FF00', 'Green', 0, true); 
+                    PocoNotificationBacklight.triggerLight('#FF0000', 'Red Alert', 0, true); 
                   } else {
-                    setActiveColor('0 Commits found. No alert needed.');
+                    setActiveColor(`${count} Commits remaining. Hardware alert skipped.`);
+                    // A standard notification is generated by the background worker if active
                   }
                 } else {
                   setActiveColor('Could not parse a number from the file.');
@@ -353,6 +368,13 @@ jobs:
                   <TouchableOpacity style={styles.fetchBtn} onPress={checkCommitsNow}>
                     <Text style={styles.btnText}>Check Link Now (Foreground)</Text>
                   </TouchableOpacity>
+
+                  {fileContent ? (
+                    <View style={styles.messageBox}>
+                      <Text style={styles.messageLabel}>FILE CONTENT:</Text>
+                      <Text style={styles.messageText}>{fileContent}</Text>
+                    </View>
+                  ) : null}
                   
                   <View style={styles.divider} />
                   
@@ -430,6 +452,9 @@ jobs:
             cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
             urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15, minHeight: 60, textAlignVertical: 'top' },
             fetchBtn: { backgroundColor: '#8B5CF6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
+            messageBox: { marginTop: 15, padding: 15, backgroundColor: '#374151', borderRadius: 8, width: '100%' },
+            messageLabel: { color: '#9CA3AF', fontSize: 12, marginBottom: 5, fontWeight: 'bold' },
+            messageText: { color: 'white', fontSize: 14, fontFamily: 'monospace' },
             divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 15 },
             dividerMain: { height: 2, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
             inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
