@@ -25,13 +25,13 @@ jobs:
 
       - name: Initialize React Native Project
         run: |
+          rm -rf pocox8rgb # Wipes any old checked-in folders to prevent duplicate code injections
           npx @react-native-community/cli@latest init pocox8rgb --version 0.74.0 --skip-install
           cd pocox8rgb
           npm install
 
       - name: Auto-Increment App Version
         run: |
-          # Bumps the Android versionCode and versionName dynamically
           sed -i "s/versionCode 1/versionCode ${GITHUB_RUN_NUMBER}/" pocox8rgb/android/app/build.gradle
           sed -i "s/versionName \"1.0\"/versionName \"1.${GITHUB_RUN_NUMBER}\"/" pocox8rgb/android/app/build.gradle
 
@@ -176,7 +176,7 @@ jobs:
 
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val urlString = intent?.getStringExtra("URL") ?: return START_NOT_STICKY
-                  val interval = intent.getIntExtra("INTERVAL", 30) // Default 30 seconds
+                  val interval = intent.getIntExtra("INTERVAL", 30)
 
                   createNotificationChannel()
                   val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
@@ -211,7 +211,6 @@ jobs:
                           val isZero = data.trim() == "0" || data.contains("\"total\":0") || data.contains("\"commits\":0") || data == "[]"
                           
                           if (isZero) {
-                              // Trigger Red LED and Audible Beep from the background
                               PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "Red Background", true)
                           }
                       }
@@ -257,13 +256,10 @@ jobs:
 
       - name: Modify MainApplication.kt & AndroidManifest.xml
         run: |
-          # Inject Package Registration
           sed -i '/PackageList(this).packages/a \ \ \ \ \ \ \ \ \ \ add(PocoNotificationPackage())' pocox8rgb/android/app/src/main/java/com/pocox8rgb/MainApplication.kt
           
-          # Inject Permissions (Foreground Service requires extra permissions in modern Android)
           sed -i '/<application/i \ \ \ \ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n\ \ \ \ <uses-permission android:name="android.permission.FLASHLIGHT" />\n\ \ \ \ <uses-permission android:name="android.permission.INTERNET" />\n\ \ \ \ <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n\ \ \ \ <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
           
-          # Inject Service declaration inside <application>
           sed -i '/<\/application>/i \ \ \ \ \ \ \ \ <service android:name=".CommitService" android:foregroundServiceType="dataSync" android:exported="false" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
 
       - name: Inject React Native App.tsx
@@ -277,7 +273,7 @@ jobs:
           export default function App() {
             const [activeColor, setActiveColor] = useState('None');
             const [delay, setDelay] = useState('0');
-            const [pollInterval, setPollInterval] = useState('30'); // New: User can define polling interval in seconds
+            const [pollInterval, setPollInterval] = useState('30');
             const [playAudio, setPlayAudio] = useState(false);
             const [apiLink, setApiLink] = useState('https://api.github.com/users/octocat/events/public');
             const [bgStatus, setBgStatus] = useState('Stopped');
@@ -416,202 +412,7 @@ jobs:
           }
 
           const styles = StyleSheet.create({
-            container: { flexGrow: 1, backgroundColor: '#111827', alignItems: 'center', paddingVertical: 40, paddingHorizont     override fun createNativeModules(reactContext: ReactApplicationContext): MutableList<NativeModule> {
-                  return mutableListOf(PocoNotificationModule(reactContext))
-              }
-              override fun createViewManagers(reactContext: ReactApplicationContext): MutableList<ViewManager<View, ReactShadowNode<*>>> {
-                  return mutableListOf()
-              }
-          }
-          EOF
-
-      - name: Modify MainApplication.kt & AndroidManifest.xml
-        run: |
-          # Inject Package Registration
-          sed -i '/PackageList(this).packages/a \ \ \ \ \ \ \ \ \ \ add(PocoNotificationPackage())' pocox8rgb/android/app/src/main/java/com/pocox8rgb/MainApplication.kt
-          
-          # Inject Permissions
-          sed -i '/<application/i \ \ \ \ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n\ \ \ \ <uses-permission android:name="android.permission.FLASHLIGHT" />\n\ \ \ \ <uses-permission android:name="android.permission.INTERNET" />' pocox8rgb/android/app/src/main/AndroidManifest.xml
-
-      - name: Inject React Native App.tsx
-        run: |
-          cat << 'EOF' > pocox8rgb/App.tsx
-          import React, { useState, useEffect } from 'react';
-          import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet, TextInput, ScrollView } from 'react-native';
-
-          const { PocoNotificationBacklight } = NativeModules;
-
-          export default function App() {
-            const [activeColor, setActiveColor] = useState('None');
-            const [delay, setDelay] = useState('0');
-            const [playAudio, setPlayAudio] = useState(false);
-            const [apiLink, setApiLink] = useState('https://api.github.com/users/octocat/events/public');
-            const [bgStatus, setBgStatus] = useState('Stopped');
-
-            useEffect(() => {
-              requestNotificationPermission();
-            }, []);
-
-            const requestNotificationPermission = async () => {
-              if (Platform.OS === 'android' && Platform.Version >= 33) {
-                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-              }
-            };
-
-            const checkCommitsNow = async () => {
-              setActiveColor('Fetching link data...');
-              try {
-                const response = await fetch(apiLink);
-                const data = await response.text();
-                
-                const isZero = data.trim() === '0' || data.includes('"total":0') || data.includes('"commits":0') || data === '[]';
-
-                if (isZero) {
-                  setActiveColor('0 Commits! Playing alert.');
-                  PocoNotificationBacklight.playTone(800, 1000); 
-                  PocoNotificationBacklight.triggerLight('#FF0000', 'Red', 0, true); 
-                } else {
-                  setActiveColor('Commits found. No alert needed.');
-                }
-              } catch (error) {
-                setActiveColor('Error fetching link.');
-              }
-            };
-
-            const startBackground = () => {
-              PocoNotificationBacklight.startBackgroundCheck(apiLink, 15);
-              setBgStatus('Running (Checks every ~15m)');
-            };
-
-            const stopBackground = () => {
-              PocoNotificationBacklight.stopBackgroundCheck();
-              setBgStatus('Stopped');
-            };
-
-            const triggerColor = (name, hex) => {
-              const delayMs = parseInt(delay, 10) * 1000 || 0;
-              setActiveColor(delayMs > 0 ? `Waiting ${delay}s...` : name);
-              PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio);
-            };
-
-            return (
-              <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>POCO X8 Core - v1.0</Text>
-                
-                <View style={styles.card}>
-                  <Text style={styles.cardTitle}>Commit Checker</Text>
-                  <TextInput
-                    style={styles.urlInput}
-                    value={apiLink}
-                    onChangeText={setApiLink}
-                    placeholder="Paste link here..."
-                    placeholderTextColor="#6B7280"
-                  />
-                  <TouchableOpacity style={styles.fetchBtn} onPress={checkCommitsNow}>
-                    <Text style={styles.btnText}>Check Link Now (Foreground)</Text>
-                  </TouchableOpacity>
-                  
-                  <View style={styles.divider} />
-                  
-                  <Text style={styles.subtitle}>Background Status: {bgStatus}</Text>
-                  <View style={styles.row}>
-                    <TouchableOpacity style={[styles.btn, styles.bgGreen]} onPress={startBackground}>
-                      <Text style={styles.btnText}>Start Worker</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={stopBackground}>
-                      <Text style={styles.btnText}>Stop</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                <View style={styles.dividerMain} />
-
-                <Text style={styles.cardTitle}>Manual LED Control</Text>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>Delay (sec):</Text>
-                  <TextInput
-                    style={styles.input}
-                    keyboardType="numeric"
-                    value={delay}
-                    onChangeText={setDelay}
-                    placeholder="0"
-                    placeholderTextColor="#6B7280"
-                  />
-                </View>
-
-                <TouchableOpacity 
-                  style={[styles.toggleBtn, playAudio ? styles.bgGreen : styles.bgGray]} 
-                  onPress={() => setPlayAudio(!playAudio)}
-                >
-                  <Text style={styles.btnText}>Audible Tone: {playAudio ? 'ON' : 'OFF'}</Text>
-                </TouchableOpacity>
-
-                <Text style={styles.subtitle}>Status: {activeColor}</Text>
-                
-                <View style={styles.row}>
-                  <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={() => triggerColor('Red', '#FF0000')}>
-                    <Text style={styles.btnText}>Red</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.btn, styles.bgGreen]} onPress={() => triggerColor('Green', '#00FF00')}>
-                    <Text style={styles.btnText}>Green</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.btn, styles.bgBlue]} onPress={() => triggerColor('Blue', '#0000FF')}>
-                    <Text style={styles.btnText}>Blue</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity style={styles.clearBtn} onPress={() => { PocoNotificationBacklight.clearLight(); setActiveColor('Off'); }}>
-                  <Text style={styles.btnText}>Clear Lights & Sounds</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            );
-          }
-
-          const styles = StyleSheet.create({
             container: { flexGrow: 1, backgroundColor: '#111827', alignItems: 'center', paddingVertical: 40, paddingHorizontal: 20 },
             title: { fontSize: 24, fontWeight: 'bold', color: 'white', marginBottom: 20, textAlign: 'center' },
             card: { width: '100%', backgroundColor: '#1F2937', padding: 20, borderRadius: 12, alignItems: 'center', marginBottom: 20 },
-            cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
-            urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15 },
-            fetchBtn: { backgroundColor: '#8B5CF6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
-            divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 15 },
-            dividerMain: { height: 2, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
-            inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-            label: { color: 'white', fontSize: 16, marginRight: 10 },
-            input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
-            toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '80%', alignItems: 'center' },
-            bgGray: { backgroundColor: '#4B5563' },
-            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 14, textAlign: 'center' },
-            row: { flexDirection: 'row', gap: 10 },
-            btn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 },
-            bgRed: { backgroundColor: '#EF4444' },
-            bgGreen: { backgroundColor: '#22C55E' },
-            bgBlue: { backgroundColor: '#3B82F6' },
-            btnText: { color: 'white', fontWeight: 'bold', textAlign: 'center' },
-            clearBtn: { marginTop: 30, backgroundColor: '#374151', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 30, borderWidth: 1, borderColor: '#4B5563' }
-          });
-          EOF
-
-      - name: Bundle React Native JS into APK
-        working-directory: pocox8rgb
-        run: |
-          mkdir -p android/app/src/main/assets
-          npx react-native bundle \
-            --platform android \
-            --dev false \
-            --entry-file index.js \
-            --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res
-
-      - name: Build Android Debug APK
-        working-directory: pocox8rgb/android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pocox8rgb-debug-apk-v${{ github.run_number }}
-          path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+            cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bo
