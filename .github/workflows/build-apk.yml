@@ -415,4 +415,47 @@ jobs:
             container: { flexGrow: 1, backgroundColor: '#111827', alignItems: 'center', paddingVertical: 40, paddingHorizontal: 20 },
             title: { fontSize: 24, fontWeight: 'bold', color: 'white', marginBottom: 20, textAlign: 'center' },
             card: { width: '100%', backgroundColor: '#1F2937', padding: 20, borderRadius: 12, alignItems: 'center', marginBottom: 20 },
-            cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bo
+            cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
+            urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15 },
+            fetchBtn: { backgroundColor: '#8B5CF6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
+            divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 15 },
+            dividerMain: { height: 2, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
+            inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+            label: { color: 'white', fontSize: 16, marginRight: 10 },
+            input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
+            toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '80%', alignItems: 'center' },
+            bgGray: { backgroundColor: '#4B5563' },
+            subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 14, textAlign: 'center' },
+            row: { flexDirection: 'row', gap: 10 },
+            btn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 },
+            bgRed: { backgroundColor: '#EF4444' },
+            bgGreen: { backgroundColor: '#22C55E' },
+            bgBlue: { backgroundColor: '#3B82F6' },
+            btnText: { color: 'white', fontWeight: 'bold', textAlign: 'center' },
+            clearBtn: { marginTop: 30, backgroundColor: '#374151', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 30, borderWidth: 1, borderColor: '#4B5563' }
+          });
+          EOF
+
+      - name: Bundle React Native JS into APK
+        working-directory: pocox8rgb
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res
+
+      - name: Build Android Debug APK
+        working-directory: pocox8rgb/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocox8rgb-debug-apk-v${{ github.run_number }}
+          path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
