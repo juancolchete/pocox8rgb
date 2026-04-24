@@ -25,7 +25,7 @@ jobs:
 
       - name: Initialize React Native Project
         run: |
-          rm -rf pocox8rgb # Wipes any old checked-in folders to prevent duplicate code injections
+          rm -rf pocox8rgb
           npx @react-native-community/cli@latest init pocox8rgb --version 0.74.0 --skip-install
           cd pocox8rgb
           npm install
@@ -99,7 +99,7 @@ jobs:
                   fun triggerHardwareAlert(context: Context, colorHex: String, colorName: String, playAudio: Boolean) {
                       val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                       val channelId = "poco_led_${colorName.lowercase()}"
-                      val parsedColor = try { Color.parseColor(colorHex) } catch (e: Exception) { Color.RED }
+                      val parsedColor = try { Color.parseColor(colorHex) } catch (e: Exception) { Color.GREEN }
                       
                       if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                           val channel = NotificationChannel(channelId, "$colorName LED", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -181,7 +181,7 @@ jobs:
                   createNotificationChannel()
                   val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
                       .setContentTitle("POCO X8 Controller")
-                      .setContentText("Checking link every $interval seconds...")
+                      .setContentText("Checking for >0 commits every $interval seconds...")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setPriority(NotificationCompat.PRIORITY_LOW)
                       .build()
@@ -208,10 +208,15 @@ jobs:
                       
                       if (connection.responseCode == 200) {
                           val data = connection.inputStream.bufferedReader().readText()
-                          val isZero = data.trim() == "0" || data.contains("\"total\":0") || data.contains("\"commits\":0") || data == "[]"
                           
-                          if (isZero) {
-                              PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "Red Background", true)
+                          // Safely parse the first number found in the markdown/text file
+                          val match = Regex("\\d+").find(data)
+                          if (match != null) {
+                              val commits = match.value.toInt()
+                              if (commits > 0) {
+                                  // Trigger Green LED and Audible Beep from the background
+                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#00FF00", "Green Background", true)
+                              }
                           }
                       }
                   } catch (e: Exception) { e.printStackTrace() }
@@ -275,7 +280,7 @@ jobs:
             const [delay, setDelay] = useState('0');
             const [pollInterval, setPollInterval] = useState('30');
             const [playAudio, setPlayAudio] = useState(false);
-            const [apiLink, setApiLink] = useState('https://api.github.com/users/octocat/events/public');
+            const [apiLink, setApiLink] = useState('https://raw.githubusercontent.com/juancolchete/reminderActions/refs/heads/main/dailyCommit.md');
             const [bgStatus, setBgStatus] = useState('Stopped');
 
             useEffect(() => {
@@ -294,14 +299,20 @@ jobs:
                 const response = await fetch(apiLink);
                 const data = await response.text();
                 
-                const isZero = data.trim() === '0' || data.includes('"total":0') || data.includes('"commits":0') || data === '[]';
-
-                if (isZero) {
-                  setActiveColor('0 Commits! Playing alert.');
-                  PocoNotificationBacklight.playTone(800, 1000); 
-                  PocoNotificationBacklight.triggerLight('#FF0000', 'Red', 0, true); 
+                // Use Regex to find the first number in the markdown file
+                const match = data.match(/\d+/);
+                
+                if (match) {
+                  const commits = parseInt(match[0], 10);
+                  if (commits > 0) {
+                    setActiveColor(`${commits} Commits! Playing alert.`);
+                    PocoNotificationBacklight.playTone(800, 1000); 
+                    PocoNotificationBacklight.triggerLight('#00FF00', 'Green', 0, true); 
+                  } else {
+                    setActiveColor('0 Commits found. No alert needed.');
+                  }
                 } else {
-                  setActiveColor('Commits found. No alert needed.');
+                  setActiveColor('Could not parse a number from the file.');
                 }
               } catch (error) {
                 setActiveColor('Error fetching link.');
@@ -327,7 +338,7 @@ jobs:
 
             return (
               <ScrollView contentContainerStyle={styles.container}>
-                <Text style={styles.title}>POCO X8 Core - Foreground Worker</Text>
+                <Text style={styles.title}>POCO X8 Core - Daily Commits</Text>
                 
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Commit Checker</Text>
@@ -337,6 +348,7 @@ jobs:
                     onChangeText={setApiLink}
                     placeholder="Paste link here..."
                     placeholderTextColor="#6B7280"
+                    multiline={true}
                   />
                   <TouchableOpacity style={styles.fetchBtn} onPress={checkCommitsNow}>
                     <Text style={styles.btnText}>Check Link Now (Foreground)</Text>
@@ -416,7 +428,7 @@ jobs:
             title: { fontSize: 24, fontWeight: 'bold', color: 'white', marginBottom: 20, textAlign: 'center' },
             card: { width: '100%', backgroundColor: '#1F2937', padding: 20, borderRadius: 12, alignItems: 'center', marginBottom: 20 },
             cardTitle: { color: 'white', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
-            urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15 },
+            urlInput: { backgroundColor: '#374151', color: 'white', width: '100%', padding: 12, borderRadius: 8, marginBottom: 15, minHeight: 60, textAlignVertical: 'top' },
             fetchBtn: { backgroundColor: '#8B5CF6', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, width: '100%', alignItems: 'center' },
             divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 15 },
             dividerMain: { height: 2, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
