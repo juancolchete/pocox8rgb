@@ -210,22 +210,22 @@ jobs:
                       if (connection.responseCode == 200) {
                           val data = connection.inputStream.bufferedReader().readText()
                           
-                          // Scans specifically for "total to commit" and extracts the number
-                          val match = Regex("(?i)total to commit.*?(\\d+)").find(data)
+                          // Scans specifically for "Total commited today" (supports 1 or 2 T's in committed just in case)
+                          val match = Regex("(?i)total commit(?:t)?ed today.*?(\\d+)").find(data)
                           
                           if (match != null) {
                               val count = match.groupValues[1].toInt()
                               if (count == 0) {
-                                  // 0 Commits: Fire the hardware LED and Sound Alert
-                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "0 Commits Alert", true)
+                                  // 0 Commits Today: Fire the hardware LED and Sound Alert
+                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "0 Commits Today", true)
                               } else {
                                   // > 0 Commits: Skip hardware alert, just send a standard notification
                                   val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                                   val notification = NotificationCompat.Builder(applicationContext, "ForegroundServiceChannel")
                                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                                       .setContentTitle("Commit Reminder")
-                                      .setContentText("Total to commit: $count")
-                                      .setStyle(NotificationCompat.BigTextStyle().bigText(data)) // Expands to show full message
+                                      .setContentText("Total committed today: $count")
+                                      .setStyle(NotificationCompat.BigTextStyle().bigText(data))
                                       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                                       .setAutoCancel(true)
                                       .build()
@@ -317,20 +317,20 @@ jobs:
                 
                 setFileContent(data); 
                 
-                // Regex specifically targets "total to commit" and grabs the number
-                const match = data.match(/total to commit.*?(\d+)/i);
+                // Regex specifically targets "Total commited today" and grabs the number
+                const match = data.match(/total commit(?:t)?ed today.*?(\d+)/i);
                 
                 if (match && match[1]) {
                   const count = parseInt(match[1], 10);
                   if (count === 0) {
-                    setActiveColor('0 Commits! Playing hardware alert.');
+                    setActiveColor('0 Commits Today! Playing hardware alert.');
                     PocoNotificationBacklight.playTone(800, 1000); 
                     PocoNotificationBacklight.triggerLight('#FF0000', 'Red Alert', 0, true); 
                   } else {
-                    setActiveColor(`${count} Commits remaining. Hardware alert skipped.`);
+                    setActiveColor(`${count} Commits Today. Hardware alert skipped.`);
                   }
                 } else {
-                  setActiveColor('Could not find "total to commit" number in file.');
+                  setActiveColor('Could not find "Total commited today" number in file.');
                 }
               } catch (error) {
                 setActiveColor('Error fetching link.');
