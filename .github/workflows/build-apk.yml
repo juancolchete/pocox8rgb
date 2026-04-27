@@ -58,10 +58,11 @@ jobs:
               override fun getName() = "PocoNotificationBacklight"
 
               @ReactMethod
-              fun startBackgroundCheck(url: String, intervalSeconds: Int) {
+              fun startBackgroundCheck(url: String, intervalSeconds: Int, frequency: Double) {
                   val intent = Intent(reactApplicationContext, CommitService::class.java).apply {
                       putExtra("URL", url)
                       putExtra("INTERVAL", intervalSeconds)
+                      putExtra("FREQUENCY", frequency)
                   }
                   if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                       reactApplicationContext.startForegroundService(intent)
@@ -77,10 +78,10 @@ jobs:
               }
 
               @ReactMethod
-              fun triggerLight(colorHex: String, colorName: String, delayMs: Int, playAudio: Boolean) {
+              fun triggerLight(colorHex: String, colorName: String, delayMs: Int, playAudio: Boolean, frequency: Double) {
                   Thread {
                       if (delayMs > 0) Thread.sleep(delayMs.toLong())
-                      triggerHardwareAlert(reactApplicationContext, colorHex, colorName, playAudio)
+                      triggerHardwareAlert(reactApplicationContext, colorHex, colorName, playAudio, frequency)
                   }.start()
               }
 
@@ -97,7 +98,7 @@ jobs:
               }
 
               companion object {
-                  fun triggerHardwareAlert(context: Context, colorHex: String, colorName: String, playAudio: Boolean) {
+                  fun triggerHardwareAlert(context: Context, colorHex: String, colorName: String, playAudio: Boolean, frequency: Double) {
                       val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                       val channelId = "poco_led_${colorName.lowercase()}"
                       val parsedColor = try { Color.parseColor(colorHex) } catch (e: Exception) { Color.RED }
@@ -124,7 +125,7 @@ jobs:
                       notificationManager.notify(1337, notification)
 
                       if (playAudio) {
-                          playToneInternal(800.0, 1000)
+                          playToneInternal(frequency, 1000)
                       }
                   }
 
@@ -178,6 +179,7 @@ jobs:
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val urlString = intent?.getStringExtra("URL") ?: return START_NOT_STICKY
                   val interval = intent.getIntExtra("INTERVAL", 30)
+                  val frequency = intent.getDoubleExtra("FREQUENCY", 800.0)
 
                   createNotificationChannel()
                   val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
@@ -193,7 +195,7 @@ jobs:
                       isRunning = true
                       thread {
                           while (isRunning) {
-                              checkCommits(urlString)
+                              checkCommits(urlString, frequency)
                               Thread.sleep(interval * 1000L)
                           }
                       }
@@ -201,7 +203,7 @@ jobs:
                   return START_STICKY
               }
 
-              private fun checkCommits(urlString: String) {
+              private fun checkCommits(urlString: String, frequency: Double) {
                   try {
                       val url = URL(urlString)
                       val connection = url.openConnection() as HttpURLConnection
@@ -210,16 +212,13 @@ jobs:
                       if (connection.responseCode == 200) {
                           val data = connection.inputStream.bufferedReader().readText()
                           
-                          // Scans specifically for "Total commited today" (supports 1 or 2 T's in committed just in case)
                           val match = Regex("(?i)total commit(?:t)?ed today.*?(\\d+)").find(data)
                           
                           if (match != null) {
                               val count = match.groupValues[1].toInt()
                               if (count == 0) {
-                                  // 0 Commits Today: Fire the hardware LED and Sound Alert
-                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "0 Commits Today", true)
+                                  PocoNotificationModule.triggerHardwareAlert(applicationContext, "#FF0000", "0 Commits Today", true, frequency)
                               } else {
-                                  // > 0 Commits: Skip hardware alert, just send a standard notification
                                   val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                                   val notification = NotificationCompat.Builder(applicationContext, "ForegroundServiceChannel")
                                       .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -293,6 +292,7 @@ jobs:
             const [activeColor, setActiveColor] = useState('None');
             const [delay, setDelay] = useState('0');
             const [pollInterval, setPollInterval] = useState('30');
+            const [toneFreq, setToneFreq] = useState('800');
             const [playAudio, setPlayAudio] = useState(false);
             const [apiLink, setApiLink] = useState('https://raw.githubusercontent.com/juancolchete/reminderActions/refs/heads/main/dailyCommit.md');
             const [bgStatus, setBgStatus] = useState('Stopped');
@@ -311,21 +311,21 @@ jobs:
             const checkCommitsNow = async () => {
               setActiveColor('Fetching link data...');
               setFileContent('');
+              const freq = parseFloat(toneFreq) || 800;
               try {
                 const response = await fetch(apiLink);
                 const data = await response.text();
                 
                 setFileContent(data); 
                 
-                // Regex specifically targets "Total commited today" and grabs the number
                 const match = data.match(/total commit(?:t)?ed today.*?(\d+)/i);
                 
                 if (match && match[1]) {
                   const count = parseInt(match[1], 10);
                   if (count === 0) {
                     setActiveColor('0 Commits Today! Playing hardware alert.');
-                    PocoNotificationBacklight.playTone(800, 1000); 
-                    PocoNotificationBacklight.triggerLight('#FF0000', 'Red Alert', 0, true); 
+                    if (playAudio) PocoNotificationBacklight.playTone(freq, 1000); 
+                    PocoNotificationBacklight.triggerLight('#FF0000', 'Red Alert', 0, playAudio, freq); 
                   } else {
                     setActiveColor(`${count} Commits Today. Hardware alert skipped.`);
                   }
@@ -339,8 +339,9 @@ jobs:
 
             const startBackground = () => {
               const intervalSecs = parseInt(pollInterval, 10) || 30;
-              PocoNotificationBacklight.startBackgroundCheck(apiLink, intervalSecs);
-              setBgStatus(`Running (Checks every ${intervalSecs}s)`);
+              const freq = parseFloat(toneFreq) || 800;
+              PocoNotificationBacklight.startBackgroundCheck(apiLink, intervalSecs, freq);
+              setBgStatus(`Running (Checks every ${intervalSecs}s at ${freq}Hz)`);
             };
 
             const stopBackground = () => {
@@ -350,8 +351,9 @@ jobs:
 
             const triggerColor = (name, hex) => {
               const delayMs = parseInt(delay, 10) * 1000 || 0;
+              const freq = parseFloat(toneFreq) || 800;
               setActiveColor(delayMs > 0 ? `Waiting ${delay}s...` : name);
-              PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio);
+              PocoNotificationBacklight.triggerLight(hex, name, delayMs, playAudio, freq);
             };
 
             return (
@@ -397,7 +399,7 @@ jobs:
                   <Text style={styles.subtitle}>Status: {bgStatus}</Text>
                   <View style={styles.row}>
                     <TouchableOpacity style={[styles.btn, styles.bgGreen]} onPress={startBackground}>
-                      <Text style={styles.btnText}>Start Persistent Worker</Text>
+                      <Text style={styles.btnText}>Start Worker</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.btn, styles.bgRed]} onPress={stopBackground}>
                       <Text style={styles.btnText}>Stop</Text>
@@ -407,17 +409,31 @@ jobs:
 
                 <View style={styles.dividerMain} />
 
-                <Text style={styles.cardTitle}>Manual LED Control</Text>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>Delay (sec):</Text>
-                  <TextInput
-                    style={styles.input}
-                    keyboardType="numeric"
-                    value={delay}
-                    onChangeText={setDelay}
-                    placeholder="0"
-                    placeholderTextColor="#6B7280"
-                  />
+                <Text style={styles.cardTitle}>Hardware Alert Settings</Text>
+                
+                <View style={styles.row}>
+                  <View style={[styles.inputContainer, {flex: 1}]}>
+                    <Text style={styles.label}>Delay (s):</Text>
+                    <TextInput
+                      style={styles.inputFlex}
+                      keyboardType="numeric"
+                      value={delay}
+                      onChangeText={setDelay}
+                      placeholder="0"
+                      placeholderTextColor="#6B7280"
+                    />
+                  </View>
+                  <View style={[styles.inputContainer, {flex: 1}]}>
+                    <Text style={styles.label}>Freq (Hz):</Text>
+                    <TextInput
+                      style={styles.inputFlex}
+                      keyboardType="numeric"
+                      value={toneFreq}
+                      onChangeText={setToneFreq}
+                      placeholder="800"
+                      placeholderTextColor="#6B7280"
+                    />
+                  </View>
                 </View>
 
                 <TouchableOpacity 
@@ -461,18 +477,19 @@ jobs:
             divider: { height: 1, backgroundColor: '#374151', width: '100%', marginVertical: 15 },
             dividerMain: { height: 2, backgroundColor: '#374151', width: '100%', marginVertical: 20 },
             inputContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-            label: { color: 'white', fontSize: 16, marginRight: 10 },
+            label: { color: 'white', fontSize: 14, marginRight: 5 },
             input: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8, width: 80, textAlign: 'center' },
-            toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '80%', alignItems: 'center' },
+            inputFlex: { backgroundColor: '#374151', color: 'white', fontSize: 16, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, flex: 1, textAlign: 'center' },
+            toggleBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, marginBottom: 20, width: '100%', alignItems: 'center' },
             bgGray: { backgroundColor: '#4B5563' },
             subtitle: { color: '#9CA3AF', marginBottom: 10, fontSize: 14, textAlign: 'center' },
-            row: { flexDirection: 'row', gap: 10 },
-            btn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 },
+            row: { flexDirection: 'row', gap: 10, width: '100%', justifyContent: 'center' },
+            btn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, flex: 1 },
             bgRed: { backgroundColor: '#EF4444' },
             bgGreen: { backgroundColor: '#22C55E' },
             bgBlue: { backgroundColor: '#3B82F6' },
             btnText: { color: 'white', fontWeight: 'bold', textAlign: 'center' },
-            clearBtn: { marginTop: 30, backgroundColor: '#374151', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 30, borderWidth: 1, borderColor: '#4B5563' }
+            clearBtn: { marginTop: 30, backgroundColor: '#374151', paddingHorizontal: 32, paddingVertical: 16, borderRadius: 30, borderWidth: 1, borderColor: '#4B5563', width: '100%' }
           });
           EOF
 
