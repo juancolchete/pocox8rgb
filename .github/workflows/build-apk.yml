@@ -32,7 +32,7 @@ jobs:
           npx @react-native-community/cli@latest init pocox8rgb --version 0.74.0 --skip-install
           cd pocox8rgb
           npm install
-          npm install @react-native-async-storage/async-storage
+          npm install @react-native-async-storage/async-storage@1.23.1
 
       - name: Auto-Increment App Version
         run: |
