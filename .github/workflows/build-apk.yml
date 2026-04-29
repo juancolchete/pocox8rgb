@@ -12,13 +12,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Setup Node.js Environment (LTS)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 'lts/*'
 
       - name: Setup Java Development Kit (JDK)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -29,6 +32,7 @@ jobs:
           npx @react-native-community/cli@latest init pocox8rgb --version 0.74.0 --skip-install
           cd pocox8rgb
           npm install
+          npm install @react-native-async-storage/async-storage
 
       - name: Auto-Increment App Version
         run: |
@@ -295,6 +299,7 @@ jobs:
           cat << 'EOF' > pocox8rgb/App.tsx
           import React, { useState, useEffect } from 'react';
           import { View, Text, TouchableOpacity, NativeModules, PermissionsAndroid, Platform, StyleSheet, TextInput, ScrollView } from 'react-native';
+          import AsyncStorage from '@react-native-async-storage/async-storage';
 
           const { PocoNotificationBacklight } = NativeModules;
 
@@ -313,11 +318,38 @@ jobs:
 
             useEffect(() => {
               requestNotificationPermission();
+              loadPersistedData();
             }, []);
 
             const requestNotificationPermission = async () => {
               if (Platform.OS === 'android' && Platform.Version >= 33) {
                 await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+              }
+            };
+
+            const loadPersistedData = async () => {
+              try {
+                const tr = await AsyncStorage.getItem('@tokenReminder');
+                if (tr) setTokenReminder(tr);
+                const ts = await AsyncStorage.getItem('@tokenStreak');
+                if (ts) setTokenStreak(ts);
+                const link = await AsyncStorage.getItem('@apiLink');
+                if (link) setApiLink(link);
+                const poll = await AsyncStorage.getItem('@pollInterval');
+                if (poll) setPollInterval(poll);
+                const freq = await AsyncStorage.getItem('@toneFreq');
+                if (freq) setToneFreq(freq);
+              } catch (e) {
+                console.error('Failed to load data', e);
+              }
+            };
+
+            const saveState = async (key, value, setter) => {
+              setter(value);
+              try {
+                await AsyncStorage.setItem(key, value);
+              } catch (e) {
+                console.error('Failed to save data', e);
               }
             };
 
@@ -410,7 +442,7 @@ jobs:
                   <TextInput
                     style={styles.urlInput}
                     value={tokenReminder}
-                    onChangeText={setTokenReminder}
+                    onChangeText={(val) => saveState('@tokenReminder', val, setTokenReminder)}
                     placeholder="PAT for reminderActions..."
                     placeholderTextColor="#6B7280"
                     secureTextEntry={true}
@@ -424,7 +456,7 @@ jobs:
                   <TextInput
                     style={styles.urlInput}
                     value={tokenStreak}
-                    onChangeText={setTokenStreak}
+                    onChangeText={(val) => saveState('@tokenStreak', val, setTokenStreak)}
                     placeholder="PAT for streakCounter..."
                     placeholderTextColor="#6B7280"
                     secureTextEntry={true}
@@ -441,7 +473,7 @@ jobs:
                   <TextInput
                     style={styles.urlInput}
                     value={apiLink}
-                    onChangeText={setApiLink}
+                    onChangeText={(val) => saveState('@apiLink', val, setApiLink)}
                     placeholder="Paste link here..."
                     placeholderTextColor="#6B7280"
                     multiline={true}
@@ -466,7 +498,7 @@ jobs:
                       style={styles.input}
                       keyboardType="numeric"
                       value={pollInterval}
-                      onChangeText={setPollInterval}
+                      onChangeText={(val) => saveState('@pollInterval', val, setPollInterval)}
                       placeholder="30"
                       placeholderTextColor="#6B7280"
                     />
@@ -505,7 +537,7 @@ jobs:
                       style={styles.inputFlex}
                       keyboardType="numeric"
                       value={toneFreq}
-                      onChangeText={setToneFreq}
+                      onChangeText={(val) => saveState('@toneFreq', val, setToneFreq)}
                       placeholder="800"
                       placeholderTextColor="#6B7280"
                     />
@@ -595,7 +627,7 @@ jobs:
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pocox8rgb-debug-apk-v${{ github.run_number }}
           path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
