@@ -62,8 +62,23 @@ jobs:
               override fun getName() = "PocoNotificationBacklight"
 
               @ReactMethod
+              fun startSequenceWorker(tokenStreak: String, tokenReminder: String) {
+                  val intent = Intent(reactApplicationContext, CommitService::class.java).apply {
+                      putExtra("ACTION_TYPE", "RUN_SEQUENCE")
+                      putExtra("TOKEN_STREAK", tokenStreak)
+                      putExtra("TOKEN_REMINDER", tokenReminder)
+                  }
+                  if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                      reactApplicationContext.startForegroundService(intent)
+                  } else {
+                      reactApplicationContext.startService(intent)
+                  }
+              }
+
+              @ReactMethod
               fun startBackgroundCheck(url: String, intervalSeconds: Int, frequency: Double) {
                   val intent = Intent(reactApplicationContext, CommitService::class.java).apply {
+                      putExtra("ACTION_TYPE", "POLL_COMMITS")
                       putExtra("URL", url)
                       putExtra("INTERVAL", intervalSeconds)
                       putExtra("FREQUENCY", frequency)
@@ -94,6 +109,7 @@ jobs:
                   val notificationManager = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                   notificationManager.cancel(1337)
                   notificationManager.cancel(1338)
+                  notificationManager.cancel(1339)
               }
 
               @ReactMethod
@@ -183,14 +199,77 @@ jobs:
               private var wakeLock: PowerManager.WakeLock? = null
 
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  val actionType = intent?.getStringExtra("ACTION_TYPE") ?: "POLL_COMMITS"
+                  createNotificationChannel()
+
+                  val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+
+                  if (actionType == "RUN_SEQUENCE") {
+                      val tokenStreak = intent?.getStringExtra("TOKEN_STREAK") ?: ""
+                      val tokenReminder = intent?.getStringExtra("TOKEN_REMINDER") ?: ""
+                      
+                      val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
+                          .setContentTitle("POCO Sequence Worker")
+                          .setContentText("Running background sequence (all.yml -> 5m -> main.yml)...")
+                          .setSmallIcon(android.R.drawable.ic_dialog_info)
+                          .setPriority(NotificationCompat.PRIORITY_LOW)
+                          .build()
+
+                      startForeground(998, notification)
+
+                      thread {
+                          val seqLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PocoX8::SequenceWakeLock")
+                          seqLock.acquire(6 * 60 * 1000L) // Auto-release after 6 mins
+                          
+                          try {
+                              val payload = "{\"ref\":\"main\"}".toByteArray()
+
+                              // 1. Run all.yml
+                              var url = URL("https://api.github.com/repos/ColcheteDAO/streakCounter/actions/workflows/all.yml/dispatches")
+                              var conn = url.openConnection() as HttpURLConnection
+                              conn.requestMethod = "POST"
+                              conn.setRequestProperty("Accept", "application/vnd.github+json")
+                              conn.setRequestProperty("Authorization", "Bearer \$tokenStreak")
+                              conn.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                              conn.doOutput = true
+                              conn.outputStream.write(payload)
+                              conn.responseCode // execute
+                              
+                              // 2. Safely wait 5 minutes in background
+                              Thread.sleep(5 * 60 * 1000L)
+                              
+                              // 3. Run main.yml
+                              url = URL("https://api.github.com/repos/juancolchete/reminderActions/actions/workflows/main.yml/dispatches")
+                              conn = url.openConnection() as HttpURLConnection
+                              conn.requestMethod = "POST"
+                              conn.setRequestProperty("Accept", "application/vnd.github+json")
+                              conn.setRequestProperty("Authorization", "Bearer \$tokenReminder")
+                              conn.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                              conn.doOutput = true
+                              conn.outputStream.write(payload)
+                              conn.responseCode // execute
+                              
+                              // Notify Completion with Blue LED
+                              PocoNotificationModule.triggerHardwareAlert(applicationContext, "#0000FF", "Sequence Done", true, 800.0)
+                              
+                          } catch (e: Exception) { 
+                              e.printStackTrace() 
+                          } finally {
+                              if (seqLock.isHeld) seqLock.release()
+                              stopSelf()
+                          }
+                      }
+                      return START_NOT_STICKY
+                  }
+
+                  // Standard Commit Polling Worker
                   val urlString = intent?.getStringExtra("URL") ?: return START_NOT_STICKY
                   val interval = intent.getIntExtra("INTERVAL", 30)
                   val frequency = intent.getDoubleExtra("FREQUENCY", 800.0)
 
-                  createNotificationChannel()
                   val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
                       .setContentTitle("POCO X8 Controller")
-                      .setContentText("Checking commits every $interval seconds...")
+                      .setContentText("Checking commits every \$interval seconds...")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setPriority(NotificationCompat.PRIORITY_LOW)
                       .build()
@@ -199,8 +278,6 @@ jobs:
 
                   if (!isRunning) {
                       isRunning = true
-                      
-                      val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                       wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PocoX8::CommitWorkerWakeLock")
                       wakeLock?.acquire()
 
@@ -222,8 +299,7 @@ jobs:
                       
                       if (connection.responseCode == 200) {
                           val data = connection.inputStream.bufferedReader().readText()
-                          
-                          val match = Regex("(?i)total commit(?:t)?ed today.*?(\\d+)").find(data)
+                          val match = Regex("(?i)total commit(?:t)?ed today.*?(\\\\d+)").find(data)
                           
                           if (match != null) {
                               val count = match.groupValues[1].toInt()
@@ -234,7 +310,7 @@ jobs:
                                   val notification = NotificationCompat.Builder(applicationContext, "ForegroundServiceChannel")
                                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                                       .setContentTitle("Commit Reminder")
-                                      .setContentText("Total committed today: $count")
+                                      .setContentText("Total committed today: \$count")
                                       .setStyle(NotificationCompat.BigTextStyle().bigText(data))
                                       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                                       .setAutoCancel(true)
@@ -353,6 +429,15 @@ jobs:
               }
             };
 
+            const startNativeSequence = () => {
+              if (!tokenStreak || !tokenReminder) {
+                setActionStatus('Error: Both tokens required for the 5-min sequence.');
+                return;
+              }
+              PocoNotificationBacklight.startSequenceWorker(tokenStreak, tokenReminder);
+              setActionStatus('Background Sequence Started: (all.yml -> waiting 5m -> main.yml). You can safely close the app.');
+            };
+
             const triggerGitHubAction = async (repoPath, workflowFile, token) => {
               if (!token) {
                 setActionStatus(`Error: Token for ${workflowFile} is required.`);
@@ -447,12 +532,7 @@ jobs:
                     placeholderTextColor="#6B7280"
                     secureTextEntry={true}
                   />
-                  <TouchableOpacity style={[styles.actionBtn, styles.bgPurple, {marginBottom: 15}]} onPress={() => triggerGitHubAction('juancolchete/reminderActions', 'main.yml', tokenReminder)}>
-                    <Text style={styles.btnText}>Run main.yml</Text>
-                  </TouchableOpacity>
-
-                  <View style={styles.divider} />
-
+                  
                   <TextInput
                     style={styles.urlInput}
                     value={tokenStreak}
@@ -461,8 +541,18 @@ jobs:
                     placeholderTextColor="#6B7280"
                     secureTextEntry={true}
                   />
-                  <TouchableOpacity style={[styles.actionBtn, styles.bgOrange]} onPress={() => triggerGitHubAction('ColcheteDAO/streakCounter', 'all.yml', tokenStreak)}>
-                    <Text style={styles.btnText}>Run all.yml</Text>
+
+                  <View style={styles.row}>
+                    <TouchableOpacity style={[styles.btn, styles.bgPurple]} onPress={() => triggerGitHubAction('juancolchete/reminderActions', 'main.yml', tokenReminder)}>
+                      <Text style={styles.btnText}>Run main.yml</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.btn, styles.bgOrange]} onPress={() => triggerGitHubAction('ColcheteDAO/streakCounter', 'all.yml', tokenStreak)}>
+                      <Text style={styles.btnText}>Run all.yml</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <TouchableOpacity style={[styles.actionBtn, styles.bgGreen, {marginTop: 15}]} onPress={startNativeSequence}>
+                    <Text style={styles.btnText}>Start Sequence Worker (all -> 5m -> main)</Text>
                   </TouchableOpacity>
 
                   {actionStatus ? <Text style={styles.actionStatusText}>{actionStatus}</Text> : null}
