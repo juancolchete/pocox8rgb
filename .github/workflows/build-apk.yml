@@ -229,11 +229,14 @@ jobs:
                               var conn = url.openConnection() as HttpURLConnection
                               conn.requestMethod = "POST"
                               conn.setRequestProperty("Accept", "application/vnd.github+json")
-                              conn.setRequestProperty("Authorization", "Bearer \$tokenStreak")
+                              conn.setRequestProperty("Authorization", "Bearer $tokenStreak")
                               conn.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                              conn.setRequestProperty("Content-Type", "application/json")
+                              conn.setRequestProperty("User-Agent", "PocoX8-App")
                               conn.doOutput = true
                               conn.outputStream.write(payload)
                               conn.responseCode // execute
+                              conn.disconnect()
                               
                               // 2. Safely wait 5 minutes in background
                               Thread.sleep(5 * 60 * 1000L)
@@ -243,11 +246,14 @@ jobs:
                               conn = url.openConnection() as HttpURLConnection
                               conn.requestMethod = "POST"
                               conn.setRequestProperty("Accept", "application/vnd.github+json")
-                              conn.setRequestProperty("Authorization", "Bearer \$tokenReminder")
+                              conn.setRequestProperty("Authorization", "Bearer $tokenReminder")
                               conn.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                              conn.setRequestProperty("Content-Type", "application/json")
+                              conn.setRequestProperty("User-Agent", "PocoX8-App")
                               conn.doOutput = true
                               conn.outputStream.write(payload)
                               conn.responseCode // execute
+                              conn.disconnect()
                               
                               // Notify Completion with Blue LED
                               PocoNotificationModule.triggerHardwareAlert(applicationContext, "#0000FF", "Sequence Done", true, 800.0)
@@ -269,7 +275,7 @@ jobs:
 
                   val notification = NotificationCompat.Builder(this, "ForegroundServiceChannel")
                       .setContentTitle("POCO X8 Controller")
-                      .setContentText("Checking commits every \$interval seconds...")
+                      .setContentText("Checking commits every $interval seconds...")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setPriority(NotificationCompat.PRIORITY_LOW)
                       .build()
@@ -299,7 +305,7 @@ jobs:
                       
                       if (connection.responseCode == 200) {
                           val data = connection.inputStream.bufferedReader().readText()
-                          val match = Regex("(?i)total commit(?:t)?ed today.*?(\\\\d+)").find(data)
+                          val match = Regex("(?i)total commit(?:t)?ed today.*?(\\d+)").find(data)
                           
                           if (match != null) {
                               val count = match.groupValues[1].toInt()
@@ -310,7 +316,7 @@ jobs:
                                   val notification = NotificationCompat.Builder(applicationContext, "ForegroundServiceChannel")
                                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                                       .setContentTitle("Commit Reminder")
-                                      .setContentText("Total committed today: \$count")
+                                      .setContentText("Total committed today: $count")
                                       .setStyle(NotificationCompat.BigTextStyle().bigText(data))
                                       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                                       .setAutoCancel(true)
