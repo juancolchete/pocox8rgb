@@ -429,15 +429,6 @@ jobs:
               }
             };
 
-            const startNativeSequence = () => {
-              if (!tokenStreak || !tokenReminder) {
-                setActionStatus('Error: Both tokens required for the 5-min sequence.');
-                return;
-              }
-              PocoNotificationBacklight.startSequenceWorker(tokenStreak, tokenReminder);
-              setActionStatus('Background Sequence Started: (all.yml -> waiting 5m -> main.yml). You can safely close the app.');
-            };
-
             const triggerGitHubAction = async (repoPath, workflowFile, token) => {
               if (!token) {
                 setActionStatus(`Error: Token for ${workflowFile} is required.`);
@@ -498,10 +489,12 @@ jobs:
             };
 
             const startBackground = () => {
-              const intervalSecs = parseInt(pollInterval, 10) || 30;
-              const freq = parseFloat(toneFreq) || 800;
-              PocoNotificationBacklight.startBackgroundCheck(apiLink, intervalSecs, freq);
-              setBgStatus(`Running (Checks every ${intervalSecs}s at ${freq}Hz)`);
+              if (!tokenStreak || !tokenReminder) {
+                setBgStatus('Error: Both tokens required for the 5-min sequence.');
+                return;
+              }
+              PocoNotificationBacklight.startSequenceWorker(tokenStreak, tokenReminder);
+              setBgStatus('Sequence Running (all -> 5m -> main)');
             };
 
             const stopBackground = () => {
@@ -550,10 +543,6 @@ jobs:
                       <Text style={styles.btnText}>Run all.yml</Text>
                     </TouchableOpacity>
                   </View>
-
-                  <TouchableOpacity style={[styles.actionBtn, styles.bgGreen, {marginTop: 15}]} onPress={startNativeSequence}>
-                    <Text style={styles.btnText}>Start Sequence Worker (all -> 5m -> main)</Text>
-                  </TouchableOpacity>
 
                   {actionStatus ? <Text style={styles.actionStatusText}>{actionStatus}</Text> : null}
                 </View>
