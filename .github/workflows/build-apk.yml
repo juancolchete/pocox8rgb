@@ -714,7 +714,7 @@ jobs:
       - name: Clean Environment and Push Updates to Git
         run: |
           # Dynamically rename the compiled output asset
-          mv app/build/outputs/apk/debug/app-debug.apk ${{ github.event.repository.name }}.apk
+          mv pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk ${{ github.event.repository.name }}.apk
         
           # Wipe temporary build trees to avoid repository data bloat
           rm -rf app/build
